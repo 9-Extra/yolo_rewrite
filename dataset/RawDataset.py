@@ -28,10 +28,10 @@ class RawDataset:
         return item
 
     def __len__(self):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def get_label_names(self):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def display(self, index: int):
         item = self[index]

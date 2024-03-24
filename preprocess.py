@@ -1,3 +1,4 @@
+import itertools
 import os
 
 import cv2.gapi
@@ -65,16 +66,17 @@ def process_data(img: str, objs: list, target_size: list) -> tuple[numpy.ndarray
     return img, mapped_objs
 
 
-def main(dest_dir: str, data: RawDataset):
-    os.makedirs(dest_dir, exist_ok=True)
+def main(dist_dir: str, data: RawDataset):
+    os.makedirs(dist_dir, exist_ok=True)
     target_size = [640, 640]
 
-    # data.items = data.items[:1000]
+    count = 1000
     obj_record = ObjectRecord(data.get_label_names(), [])
-    with h5py.File(os.path.join(dest_dir, "data.h5"), "w") as h5f:
-        h5f.create_dataset("image", (len(data), 3, *target_size), dtype=numpy.uint8)
+    with h5py.File(os.path.join(dist_dir, "data.h5"), "w") as h5f:
+        h5f.create_dataset("label", obj_record.label_names)
+        h5f.create_dataset("image", (count, 3, *target_size), dtype=numpy.uint8)
         images: h5py.Dataset = h5f["image"]
-        for i, d in enumerate(tqdm.tqdm(data)):
+        for i, d in enumerate(tqdm.tqdm(itertools.islice(data, count), total=count)):
             img, mapped_objs = process_data(d.img, d.objs, target_size)
 
             obj_record.objs.append(mapped_objs)
@@ -86,10 +88,10 @@ def main(dest_dir: str, data: RawDataset):
 
     # obj_record.objs = Parallel(n_jobs=6, batch_size=16, verbose=10)(tasks)
 
-    obj_record.dump(os.path.join(dest_dir, "obj_record.pkl"))
+    obj_record.dump(os.path.join(dist_dir, "obj_record.pkl"))
 
     pass
 
 
 if __name__ == '__main__':
-    main("dataset/cocos", DroneDataset("G:/datasets/DroneTrainDataset"))
+    main("preprocess/drone", DroneDataset("G:/datasets/DroneTrainDataset"))

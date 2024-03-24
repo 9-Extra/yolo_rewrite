@@ -1,3 +1,4 @@
+import os.path
 import pickle
 import h5py
 import numpy
@@ -23,7 +24,9 @@ class ObjectRecord:
 
 
 class H5Dataset(Dataset):
-    def __init__(self, h5_path: str, obj_record_path: str):
+    def __init__(self, path: str):
+        h5_path = os.path.join(path, "data.h5")
+        obj_record_path = os.path.join(path, "obj_record.pkl")
         self.h5f = h5py.File(h5_path, "r")
         self.images: h5py.Dataset = self.h5f["image"]
         self.obj_record = ObjectRecord.load(obj_record_path)
@@ -41,9 +44,10 @@ class H5Dataset(Dataset):
         im, label_batch = zip(*batch)  # transposed
         labels = []
         for i, lb in enumerate(label_batch):
-            new_label = numpy.empty_like(lb, shape=(len(lb), 6))
-            new_label[:, 0] = i
-            new_label[:, 1:] = numpy.stack(lb)
-            labels.append(new_label)
+            if len(lb) != 0:
+                new_label = numpy.empty_like(lb, shape=(len(lb), 6))
+                new_label[:, 0] = i
+                new_label[:, 1:] = numpy.stack(lb)
+                labels.append(new_label)
         return numpy.stack(im, 0), numpy.concatenate(labels, 0)
 
