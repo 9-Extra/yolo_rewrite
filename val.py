@@ -54,7 +54,7 @@ def compute_ap(recall, precision):
     mpre = numpy.flip(numpy.maximum.accumulate(numpy.flip(mpre)))
 
     # Integrate area under curve
-    method = "interp"  # methods: 'continuous', 'interp'
+    method = "continuous"  # methods: 'continuous', 'interp'
     if method == "interp":
         x = numpy.linspace(0, 1, 101)  # 101-point interp (COCO)
         ap = numpy.trapz(numpy.interp(x, mrec, mpre), x)  # integrate
@@ -203,7 +203,7 @@ def val(network: torch.nn.Module, train_loader: DataLoader):
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
 
     # Print results
-    print(f"mp = {mp}, mr = {mr}, map50 = {map50}, map = {map}")
+    print(f"准确率 = {mp}, 召回率 = {mr}, map50 = {map50}, map = {map}")
     pass
 
 

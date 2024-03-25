@@ -40,12 +40,13 @@ def main(dataset_dir, start_weight_dir=None):
     network.train().to(device, non_blocking=True)
 
     dataset = H5Dataset(dataset_dir)
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True, collate_fn=H5Dataset.collate_fn)
+    dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
+                            collate_fn=H5Dataset.collate_fn)
 
     train(network, dataloader, 10, "weight", 1)
 
-pass
 
+pass
 
 if __name__ == '__main__':
     main("preprocess/drone/")
