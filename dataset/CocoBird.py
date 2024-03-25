@@ -13,12 +13,7 @@ class CocoBird(CocoDataset.CocoDataset):
 
         super().__init__(image_path, ann_path, check_channel=False)
 
-        bird_id = -1
-        for k, v in self.label_names.items():
-            if v == "bird":
-                bird_id = k
-                break
-        assert bird_id != -1
+        bird_id = self.label_names.index("bird")
 
         bird_items = []
         for item in tqdm.tqdm(self.items):
@@ -32,7 +27,7 @@ class CocoBird(CocoDataset.CocoDataset):
                     bird_items.append(DataItem(item.img, objs))
 
         self.items = bird_items
-        self.label_names = {0: "bird"}
+        self.label_names = ["bird"]
     pass
 
 

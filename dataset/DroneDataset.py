@@ -22,7 +22,9 @@ def parse_xml(xml_path: str):
 
 
 class DroneDataset(RawDataset):
-    def __init__(self, root: str):
+    items: list[DataItem]
+
+    def __init__(self, root: str, split: str = "train"):
         img_dir = os.path.join(root, "Drone_TrainSet")
         ann_dir = os.path.join(root, "Drone_TrainSet_XMLs")
 
@@ -32,14 +34,15 @@ class DroneDataset(RawDataset):
             self.items.append(DataItem(os.path.join(img_dir, filename), res))
         pass
 
-    def __getitem__(self, index):
-        return self.items[index]
+        sp = int(len(self.items) * 0.8)
+        if split == "train":
+            self.items = self.items[:sp]
+        elif split == "val":
+            self.items = self.items[sp:]
+        else:
+            raise ValueError("split must be train or val")
 
-    def __len__(self):
-        return len(self.items)
-
-    def get_label_names(self):
-        return {0: "drone"}
+        super().__init__(self.items, ["drone"])
 
 
 if __name__ == '__main__':

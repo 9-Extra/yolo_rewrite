@@ -1,4 +1,3 @@
-import pickle
 import json
 import os
 from PIL import Image
@@ -8,10 +7,6 @@ from dataset.RawDataset import RawDataset, DataItem
 
 
 class CocoDataset(RawDataset):
-    items: list[DataItem]
-    label_names: dict[int, str]
-    img_dir_path: str
-
     def __init__(self, img_dir_path: str, ann_path: str, check_channel: bool = True):
         assert os.path.isdir(img_dir_path)
         self.img_dir_path = img_dir_path
@@ -22,11 +17,11 @@ class CocoDataset(RawDataset):
 
         # 重映射类别id
         categories = ann_file_json["categories"]
-        self.label_names = {}
+        label_names = []
         categories_map = {}
         for i, c in enumerate(categories):
             categories_map[c["id"]] = i
-            self.label_names[i] = c["name"]
+            label_names.append(c["name"])
 
         item_dict = {}
         for img in images:
@@ -38,24 +33,16 @@ class CocoDataset(RawDataset):
             item_dict[ann["image_id"]].objs.append((mapped_id, ann["bbox"]))
 
         if check_channel:
-            self.items = []
+            items = []
             for k, v in tqdm.tqdm(item_dict.items()):
                 if len(v.objs) != 0:
                     img = Image.open(v.img)
                     if (hasattr(img, "layers") and img.layers == 3) or img.mode == "RGB":
-                        self.items.append(v)
+                        items.append(v)
         else:
-            self.items = list(item_dict.values())
-        print("filtered image num = ", len(self.items))
-
-    def __getitem__(self, index) -> DataItem:
-        return self.items[index]
-
-    def __len__(self):
-        return len(self.items)
-
-    def get_label_names(self):
-        return self.label_names
+            items = list(item_dict.values())
+        print("filtered image num = ", len(items))
+        super().__init__(items, label_names)
 
 
 if __name__ == '__main__':

@@ -6,10 +6,10 @@ from torch.utils.data import Dataset
 
 
 class ObjectRecord:
-    label_names: dict[int, str]
+    label_names: list[str]
     objs: list[numpy.ndarray]
 
-    def __init__(self, label_names: dict[int, str], objs: list[numpy.ndarray]):
+    def __init__(self, label_names: list[str], objs: list[numpy.ndarray]):
         self.label_names = label_names
         self.objs = objs
 

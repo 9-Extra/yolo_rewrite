@@ -13,28 +13,27 @@ class DataItem:
 
 
 class RawDataset:
+    items: list[DataItem]
+    label_names: list[str]
+
+    def __init__(self, items: list[DataItem], label_names: list[str]):
+        self.items = items
+        self.label_names = label_names
+
     def __getitem__(self, index) -> DataItem:
-        raise NotImplementedError()
+        return self.items[index]
 
     def __iter__(self):
-        self._iter = 0
-        return self
-
-    def __next__(self):
-        if self._iter >= len(self):
-            raise StopIteration
-        item = self.__getitem__(self._iter)
-        self._iter += 1
-        return item
+        return self.items
 
     def __len__(self):
-        raise NotImplementedError
+        return len(self.items)
 
-    def get_label_names(self):
-        raise NotImplementedError
+    def get_label_names(self) -> list[str]:
+        return self.label_names
 
     def display(self, index: int):
-        item = self[index]
+        item = self.items[index]
         img = cv2.imread(item.img)
         for obj in item.objs:
             x, y, width, height = [int(x) for x in obj[1]]
@@ -45,3 +44,31 @@ class RawDataset:
                               cv2.LINE_AA)
         cv2.imshow('image', img)
         cv2.waitKey(0)
+
+
+def mix_raw_dataset(datasets: list[RawDataset]) -> RawDataset:
+    categories_map = {}
+    id = 0
+    for d in datasets:
+        for name in d.label_names:
+            if name not in categories_map:
+                categories_map[name] = id
+                id += 1
+
+    final_items = []
+    for d in datasets:
+        for item in d.items:
+            remapped_objs = []
+            for i in range(len(item.objs)):
+                name = d.label_names[item.objs[i][0]]
+                box = item.objs[i][1]
+                remapped_objs.append((categories_map[name], box))
+            final_items.append(DataItem(item.img, remapped_objs))
+
+    label_names = [] * len(categories_map)
+    for name, id in categories_map:
+        label_names[id] = name
+
+    return RawDataset(final_items, label_names)
+
+

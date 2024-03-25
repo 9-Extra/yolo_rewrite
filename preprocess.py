@@ -70,13 +70,13 @@ def main(dist_dir: str, data: RawDataset):
     os.makedirs(dist_dir, exist_ok=True)
     target_size = [640, 640]
 
-    count = 1000
     obj_record = ObjectRecord(data.get_label_names(), [])
     with h5py.File(os.path.join(dist_dir, "data.h5"), "w") as h5f:
-        h5f.create_dataset("label", obj_record.label_names)
+        count = len(data)
+
         h5f.create_dataset("image", (count, 3, *target_size), dtype=numpy.uint8)
         images: h5py.Dataset = h5f["image"]
-        for i, d in enumerate(tqdm.tqdm(itertools.islice(data, count), total=count)):
+        for i, d in enumerate(tqdm.tqdm(data, total=count)):
             img, mapped_objs = process_data(d.img, d.objs, target_size)
 
             obj_record.objs.append(mapped_objs)
@@ -86,12 +86,10 @@ def main(dist_dir: str, data: RawDataset):
             img = numpy.ascontiguousarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB).transpose(2, 0, 1))
             images.write_direct(img, dest_sel=i)
 
-    # obj_record.objs = Parallel(n_jobs=6, batch_size=16, verbose=10)(tasks)
-
     obj_record.dump(os.path.join(dist_dir, "obj_record.pkl"))
 
     pass
 
 
 if __name__ == '__main__':
-    main("preprocess/drone", DroneDataset("G:/datasets/DroneTrainDataset"))
+    main("preprocess/drone", DroneDataset("G:/datasets/DroneTrainDataset", split="val"))
