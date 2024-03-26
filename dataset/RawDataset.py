@@ -24,7 +24,7 @@ class RawDataset:
         return self.items[index]
 
     def __iter__(self):
-        return self.items
+        return iter(self.items)
 
     def __len__(self):
         return len(self.items)
@@ -47,6 +47,10 @@ class RawDataset:
 
 
 def mix_raw_dataset(datasets: list[RawDataset]) -> RawDataset:
+    print("mixing datasets")
+    for i, d in enumerate(datasets):
+        print(f"dataset {i} num {len(d)} labels: {d.label_names} ")
+
     categories_map = {}
     id = 0
     for d in datasets:
@@ -65,8 +69,8 @@ def mix_raw_dataset(datasets: list[RawDataset]) -> RawDataset:
                 remapped_objs.append((categories_map[name], box))
             final_items.append(DataItem(item.img, remapped_objs))
 
-    label_names = [] * len(categories_map)
-    for name, id in categories_map:
+    label_names = [""] * len(categories_map)
+    for name, id in categories_map.items():
         label_names[id] = name
 
     return RawDataset(final_items, label_names)

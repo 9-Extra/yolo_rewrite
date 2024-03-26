@@ -6,9 +6,11 @@ import h5py
 import numpy
 import tqdm
 
+from dataset.CocoBird import CocoBird
 from dataset.DroneDataset import DroneDataset
-from dataset.RawDataset import RawDataset
+from dataset.RawDataset import RawDataset, mix_raw_dataset
 from dataset.h5Dataset import ObjectRecord
+from dataset.BirdVSDroneBird import BirdVSDroneBird
 
 
 def display(img, objs, label_names):
@@ -92,4 +94,10 @@ def main(dist_dir: str, data: RawDataset):
 
 
 if __name__ == '__main__':
-    main("preprocess/drone", DroneDataset("G:/datasets/DroneTrainDataset", split="val"))
+    drone = DroneDataset("G:/datasets/DroneTrainDataset")
+    bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
+    coco_bird = dataset = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
+    mixed = mix_raw_dataset([drone, bird, coco_bird])
+    for i in range(len(mixed)):
+        mixed.display(i)
+    main("preprocess/drone", mixed)
