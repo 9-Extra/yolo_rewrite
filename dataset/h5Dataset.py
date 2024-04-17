@@ -49,5 +49,6 @@ class H5Dataset(Dataset):
                 new_label[:, 0] = i
                 new_label[:, 1:] = numpy.stack(lb)
                 labels.append(new_label)
-        return numpy.stack(im, 0), numpy.concatenate(labels, 0)
+        labels = numpy.concatenate(labels, 0) if len(labels) else numpy.zeros((0, 6), dtype=numpy.float32)
+        return numpy.stack(im, 0), labels
 

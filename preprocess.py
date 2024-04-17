@@ -94,10 +94,9 @@ def main(dist_dir: str, data: RawDataset):
 
 
 if __name__ == '__main__':
-    drone = DroneDataset("G:/datasets/DroneTrainDataset")
-    bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
-    coco_bird = dataset = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
-    mixed = mix_raw_dataset([drone, bird, coco_bird])
-    for i in range(len(mixed)):
-        mixed.display(i)
-    main("preprocess/drone", mixed)
+    drone = DroneDataset("G:/datasets/DroneTrainDataset", split="train")
+    # bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
+    # coco_bird = dataset = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
+    # mixed = mix_raw_dataset([drone, bird, coco_bird])
+    # mixed = mix_raw_dataset(drone)
+    main("preprocess/pure_drone_train", drone)

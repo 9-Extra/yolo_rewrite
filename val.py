@@ -75,8 +75,6 @@ def ap_per_class(tp, conf, pred_cls, target_cls, eps=1e-16):
         conf:  Objectness value from 0-1 (nparray).
         pred_cls:  Predicted object classes (nparray).
         target_cls:  True object classes (nparray).
-        plot:  Plot precision-recall curve at mAP@0.5
-        save_dir:  Plot save directory
     # Returns
         The average precision as computed in py-faster-rcnn.
     """
@@ -158,6 +156,7 @@ def val(network: torch.nn.Module, train_loader: DataLoader):
     iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
     mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0
+    fp = 0.0
     stats = []
 
     for i, (img, target) in enumerate(tqdm.tqdm(train_loader)):
@@ -184,9 +183,10 @@ def val(network: torch.nn.Module, train_loader: DataLoader):
 
             nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
 
-            correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
+            correct = torch.zeros([npr, niou], dtype=torch.bool, device=device)  # init
 
             if npr == 0:
+                # 没有预测任何东西
                 if nl != 0:
                     stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
             else:
@@ -200,21 +200,23 @@ def val(network: torch.nn.Module, train_loader: DataLoader):
     if len(stats) and stats[0].any():
         tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats)
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+        mp, mr, map50, map, fp = p.mean(), r.mean(), ap50.mean(), ap.mean(), fp.mean()
 
     # Print results
-    print(f"准确率 = {mp}, 召回率 = {mr}, map50 = {map50}, map = {map}")
+    print(f"准确率 = {mp}, 召回率 = {mr} 误识别 = {fp}, map50 = {map50}, map = {map}")
     pass
 
 
 def main(weight_path: str, data_path: str):
     device = torch.device("cuda")
+    torch.backends.cudnn.benchmark = True
 
-    network = yolo.Network.NetWork(80)
+    network = yolo.Network.NetWork(2)
     network.load_state_dict(torch.load(weight_path))
     network.eval().to(device, non_blocking=True)
 
     dataset = H5Dataset(data_path)
+    print("样本数：", len(dataset))
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
                             collate_fn=H5Dataset.collate_fn)
 
@@ -225,4 +227,5 @@ def main(weight_path: str, data_path: str):
 
 
 if __name__ == '__main__':
-    main("weight/yolo_drone.pth", "preprocess/drone")
+    main("weight/yolo.pth", "preprocess/drone_val")
+    main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")

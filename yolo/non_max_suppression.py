@@ -68,7 +68,9 @@ def _box_iou_with_area(box1, box2):
 #     return prediction[keep, :][:, [0, 1, 2, 3, 5, 6]]
 def non_max_suppression(prediction: torch.Tensor, conf_threshold=0.25, iou_threshold=0.45):
     num_classes = prediction.shape[-1] - 5
-    prediction = prediction[prediction[..., 4] > conf_threshold]
+    conf = prediction[..., 4] * torch.max(prediction[..., 5:], dim=-1)[0]
+    prediction[..., 4] = conf
+    prediction = prediction[conf > conf_threshold]
     xy, wh, conf, _ = prediction.tensor_split([2, 4, 5], dim=-1)
 
     x1y1 = xy - wh / 2

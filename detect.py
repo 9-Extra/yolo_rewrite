@@ -28,6 +28,7 @@ def display(img: numpy.ndarray, objs, label_names):
 def detect(network: yolo.Network.NetWork, images: list[str], label_names, device: torch.device):
     with torch.no_grad():
         network.eval().to(device, non_blocking=True)
+        network.detect.output_odd_feature = True
 
         for img in images:
             # ori_img = cv2.imread(img) / 255
@@ -41,7 +42,7 @@ def detect(network: yolo.Network.NetWork, images: list[str], label_names, device
             img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB).transpose(2, 0, 1)[numpy.newaxis, ...]
             img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
 
-            output = network(img)
+            output, ood_feature = network(img)
             output = network.detect.inference_post_process(output)
 
             output = non_max_suppression(output)
@@ -53,11 +54,11 @@ def detect(network: yolo.Network.NetWork, images: list[str], label_names, device
 def main(weight_dir, img_dir):
     device = torch.device("cuda")
 
-    network = yolo.Network.NetWork(80)
+    network = yolo.Network.NetWork(2)
     network.load_state_dict(torch.load(weight_dir))
     network.eval().to(device, non_blocking=True)
 
-    label_names = ObjectRecord.load("preprocess/drone/obj_record.pkl").label_names
+    label_names = ["drone", "bird"]
 
     detect(network, [os.path.join(img_dir, x) for x in os.listdir(img_dir)], label_names, device)
 
@@ -65,4 +66,4 @@ def main(weight_dir, img_dir):
 
 
 if __name__ == '__main__':
-    main("weight/yolo_drone.pth", r"G:\datasets\BirdVsDrone\Birds")
+    main("weight/yolo_drone_with_bird.pth", r"G:\datasets\BirdVsDrone\Drones")

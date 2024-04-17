@@ -113,23 +113,38 @@ class Detect(Module):
         self.register_buffer("anchors", torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
         self.m = torch.nn.ModuleList(torch.nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
 
+        self.output_odd_feature = False
+
         s = 256  # 2x min stride
         self.stride = torch.tensor([s / x for x in (32, 16, 8)])  # [8, 16, 32]
         self.anchors /= self.stride.view(-1, 1, 1)  # 将anchor大小映射到基于grid的比例
 
-    def forward(self, x):
-        """Processes input through YOLOv5 layers, altering shape for detection: `x(bs, 3, ny, nx, 85)`."""
+    def forward(self, x: list[torch.Tensor]):
+        """
+        Processes input through YOLOv5 layers, altering shape for detection: `x(bs, 3, ny, nx, 85)`.
+        网络输出的最后一维的格式为：[x坐标, y坐标, 宽度, 高度, 置信度, 每个类别的logit]
+        """
+        ood_score = []
+
         for i in range(self.nl):
+            if self.output_odd_feature:
+                ood_score.append(x[i].detach())
+
             x[i] = self.m[i](x[i])  # 检测头，就是1x1卷积，输出an * (nc + 5)的特征图
             # 然后，将an（每层的anchor数）和nc + 5（一个物体的特征数）单独切分到两个维度里, x(bs,255,20,20) to x(bs,3,20,20,85)
             x[i] = einops.rearrange(x[i], "bs (na no) ny nx -> bs na ny nx no", na=self.na, no=self.no)
             x[i] = x[i].contiguous()
-        return x
+
+        if self.output_odd_feature:
+            return x, ood_score
+        else:
+            return x
 
     def inference_post_process(self, x):
         # 网络输出的x是基于anchor的偏移量，需要转换成基于整个图像的坐标
         z = []
         for i in range(self.nl):
+            # x[i]的结构为x(bs,3,20,20,85)
             bs, _, ny, nx, _ = x[i].shape
 
             # 对于不同大小的图片，检测头的输出的特征图大小是不一样的，所以需要根据特征图的大小来生成网格
@@ -137,14 +152,27 @@ class Detect(Module):
             if self.grid[i].shape[2:4] != x[i].shape[2:4]:
                 self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
 
-            # grid是网格的偏移量，anchor_grid是网格的大小
-            xy, wh, conf = x[i].sigmoid().split((2, 2, self.nc + 1), 4)
-            xy = (xy * 2 + self.grid[i]) * self.stride[i]  # xy
+            # grid是网格中心点，anchor_grid是网格的大小
+            # 这个sigmoid会对输入的所有数进行sigmoid，因为恰好结果中的每一项每个数都需要sigmoid
+            x[i].sigmoid_()
+            xy, wh, conf_and_cls_logit = x[i].split((2, 2, 1 + self.nc), 4)
+            # xy * 2将结果映射到(0, 2)，再-1得到相对锚框中心点的偏移量(-1, 1)
+            # 这个偏移量加上锚框中心点的位置gird得到bbox中心点在整个图像中的绝对坐标
+            # 但这个坐标是基于该层的特征图的，每层的结果都是从特征图中通过1x1卷积提取出来，则每个锚框对应该层的特征图上的一个像素
+            # 而特征图的尺寸都是原图像按比例缩小的，所以需要将坐标重新按比例放大
+            # 于是最终乘以特征图缩放比例self.stride，得到相对原图像的坐标
+            xy = (xy * 2 - 1 + self.grid[i]) * self.stride[i]  # xy
+            # (wh * 2) ** 2 是yolo定义的从输出到 锚框长宽缩放比例 的映射，可以看出缩放可达最大4倍
+            # anchor_grid是预先将预定义锚框大小self.anchors与缩放比例self.stride乘起来
+            # 这样通过一次乘法就可以直接得到bbox相对原图像的大小
             wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
 
-            y = torch.cat((xy, wh, conf), 4)
-            z.append(y.view(bs, self.na * nx * ny, self.no))
+            y = torch.cat((xy, wh, conf_and_cls_logit), 4)
+            # 将所有位置的所有锚框的结果都合并到一个维度，因为是哪个锚框得出的结果对于后面的处理并不重要
+            y = y.view(bs, self.na * nx * ny, self.no)
+            z.append(y)
 
+        # 合并所有层的结果，因为是哪一层的结果对后面的处理也不重要
         return torch.cat(z, 1)
 
     def _make_grid(self, nx: int, ny: int, i: int):
@@ -152,14 +180,15 @@ class Detect(Module):
         :param nx: x方向的anchor数量
         :param ny: y方向的anchor数量
         :param i: 要生成的网络对应的anchor层
-        :return: grid是网格的偏移量，anchor_grid是网格的大小
+        :return: grid是网格的中心点位置，anchor_grid是网格的大小
         """
         d = self.anchors[i].device
         t = self.anchors[i].dtype
         shape = 1, self.na, ny, nx, 2  # grid shape
         y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
         yv, xv = torch.meshgrid(y, x, indexing="ij")
-        grid = torch.stack((xv, yv), 2).expand(shape) - 0.5  # add grid offset, i.e. y = 2.0 * x - 0.5
+        # 生成的是锚框坐上角的坐标，加上0.5成中心点的坐标
+        grid = torch.stack((xv, yv), 2).expand(shape) + 0.5
         anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
         return grid, anchor_grid
 

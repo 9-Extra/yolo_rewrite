@@ -33,8 +33,9 @@ def train(network: torch.nn.Module, train_loader: DataLoader, epochs: int, save_
 
 def main(dataset_dir, start_weight_dir=None):
     device = torch.device("cuda")
+    torch.backends.cudnn.benchmark = True
 
-    network = yolo.Network.NetWork(80)
+    network = yolo.Network.NetWork(2)
     if start_weight_dir:
         network.load_state_dict(torch.load(start_weight_dir))
     network.train().to(device, non_blocking=True)
@@ -49,4 +50,4 @@ def main(dataset_dir, start_weight_dir=None):
 pass
 
 if __name__ == '__main__':
-    main("preprocess/drone/")
+    main("preprocess/pure_drone_train")
