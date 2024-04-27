@@ -126,7 +126,7 @@ class ComputeLoss:
                 pxy, pwh, _, pcls = pi[b, a, gj, gi].tensor_split((2, 4, 5), dim=1)  # faster, requires torch 1.8.0
 
                 # 回归，从模型输出值计算实际坐标
-                # sigmoid会将值映射到0-1区间
+                # sigmoid会将值映射到0-1区间，然后本来应该减1，但是
                 pxy = pxy.sigmoid() * 2 - 0.5
                 pwh = (pwh.sigmoid() * 2) ** 2 * anchors[i]
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
@@ -165,32 +165,39 @@ class ComputeLoss:
         na, nt = self.na, targets.shape[0]  # number of anchors, targets
         tcls, tbox, indices, anch = [], [], [], []
         gain = torch.ones(7, device=self.device)  # normalized to gridspace gain
+        # 生成与targets形状一致的anchor_index
         ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
-        targets = torch.cat((targets.repeat(na, 1, 1), ai[..., None]), 2)  # append anchor indices
+        # 将targets复制na次，再与anchor_index合并，这样每个anchor都有一个targets，并且可以通过anchor_index判断是哪一个anchor
+        # targets最后的格式为target: (anchor数，目标数，7)，最后一维格式为(image ,class, x, y, w, h, anchor_index)
+        targets = torch.cat((targets.repeat(na, 1, 1), ai[..., None]), -1)  # append anchor indices
 
         g = 0.5  # bias
         off = (torch.tensor([[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1]], device=self.device, ).float() * g)  # offsets
 
         for i in range(self.nl):
+            # 遍历每一层，获取该层的anchors和输出大小（也是特征图大小和输出bbox数）
             anchors, shape = self.anchors[i], p[i].shape
-            gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
+            grid_w, gird_h = shape[3], shape[2]
+            # gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
+            gain[2], gain[3], gain[4], gain[5] = grid_w, gird_h, grid_w, gird_h
 
             # Match targets to anchors
-            t = targets * gain  # shape(3,n,7)
+            t = targets * gain  # 映射到相对特征图的坐标，格式为(image ,class, x, y, w, h, anchor_index)
             if nt:
                 # Matches
-                r = t[..., 4:6] / anchors[:, None]  # wh ratio
-                j = torch.max(r, 1 / r).max(2)[0] < 4.0  # compare
-                # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
-                t = t[j]  # filter
+                wh = t[..., 4:6]
+                r = wh / anchors[:, None]  # wh 的目标缩放比例
+                filter_mash = torch.max(r, 1 / r).max(2)[0] < 4.0  # 只有缩放比小于4的目标才需要被拟合，其它的过滤掉
+                # filter_mash = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
+                t = t[filter_mash]  # filter
 
                 # Offsets
-                gxy = t[:, 2:4]  # grid xy
-                gxi = gain[[2, 3]] - gxy  # inverse
+                gxy = t[:, 2:4]  # 目标在特征图中的坐标
+                gxi = gain[[2, 3]] - gxy  # 映射到相对于锚框的坐标（偏移量）
                 j, k = ((gxy % 1 < g) & (gxy > 1)).T
                 l, m = ((gxi % 1 < g) & (gxi > 1)).T
                 j = torch.stack((torch.ones_like(j), j, k, l, m))
-                t = t.repeat((5, 1, 1))[j]
+                t = t.repeat((5, 1, 1))[j]  # 过滤
                 offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j]
             else:
                 t = targets[0]

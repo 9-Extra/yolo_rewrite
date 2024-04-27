@@ -66,4 +66,4 @@ def main(weight_dir, img_dir):
 
 
 if __name__ == '__main__':
-    main("weight/yolo_drone_with_bird.pth", r"G:\datasets\BirdVsDrone\Drones")
+    main("weight/yolo_0.pth", r"G:\datasets\BirdVsDrone\Drones")

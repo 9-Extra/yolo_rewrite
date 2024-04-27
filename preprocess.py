@@ -29,7 +29,7 @@ def display(img, objs, label_names):
     cv2.waitKey(0)
 
 
-def letterbox(im, new_shape: list, color=(114, 114, 114), scaleup=True):
+def letterbox(im, new_shape: list, color=(114, 114, 114), scaleup=False):
     """Resizes and pads image to new_shape with stride-multiple constraints, returns resized image, ratio, padding."""
     height, width = im.shape[:2]  # current shape [height, width]
     # Scale ratio (new / old)

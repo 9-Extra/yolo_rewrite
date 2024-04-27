@@ -4,7 +4,11 @@ import torch
 from torch.utils.data import DataLoader
 from dataset.h5Dataset import H5Dataset
 import tqdm
+from yolo.energy_ood import EnergyLoss
 
+
+def ood_finetune(network: torch.nn.Module, train_loader: DataLoader, ood_loader: DataLoader, epochs: int, save_path: str):
+    pass
 
 def train(network: torch.nn.Module, train_loader: DataLoader, epochs: int, save_path: str, save_interval: int):
     os.makedirs(save_path, exist_ok=True)
@@ -28,7 +32,7 @@ def train(network: torch.nn.Module, train_loader: DataLoader, epochs: int, save_
             torch.save(network.state_dict(), os.path.join(save_path, f"yolo_{epoch}.pth"))
             print(f"Loss: {loss.item()}")
 
-    torch.save(network.state_dict(), os.path.join(save_path, f"yolo.pth"))
+    torch.save(network.state_dict(), os.path.join(save_path, f"yolo_original.pth"))
 
 
 def main(dataset_dir, start_weight_dir=None):

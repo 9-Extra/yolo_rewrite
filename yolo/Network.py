@@ -19,6 +19,20 @@ class FeatureExporter(Module):
         return x
 
 
+class FeatureConcat(Module):
+    storage: dict
+    name: str
+    clone: bool
+
+    def __init__(self, storage: dict, name: str):
+        super().__init__()
+        self.storage = storage
+        self.name = name
+
+    def forward(self, x: torch.Tensor):
+        return torch.cat((x, self.storage[self.name]), dim=1)
+
+
 class Conv(Module):
     default_act = torch.nn.SiLU(True)  # default activation
     inner: Module
@@ -97,10 +111,59 @@ class SPPF(Module):
         return self.cv2(torch.cat((x, y1, y2, y3), 1))
 
 
+class BackBone(Module):
+    feature_storage: dict
+
+    def __init__(self):
+        super().__init__()
+
+        self.feature_storage = {}
+
+        self.inner = torch.nn.Sequential(
+            Conv(3, 32, 6, 2, 2),
+            Conv(32, 64, 3, 2),
+            C3(64, 64, 2),
+            Conv(64, 128, 3, 2),
+            FeatureExporter(self.feature_storage, "b4"),
+            C3(128, 128, 4),
+            Conv(128, 256, 3, 2),
+            FeatureExporter(self.feature_storage, "b6"),
+            C3(256, 256, 6),
+            Conv(256, 512, 3, 2),
+            C3(512, 512, 2),
+            SPPF(512, 512, 5),
+            # head
+            Conv(512, 256, 1, 1),  # 10
+            FeatureExporter(self.feature_storage, "x10"),
+            torch.nn.Upsample(None, 2, "nearest"),  # 11
+            FeatureConcat(self.feature_storage, "b6"),  # 12
+            C3(256 + 256, 256, 2, False),  # 13
+            Conv(256, 128, 1, 1),  # 14
+            FeatureExporter(self.feature_storage, "x14"),
+            torch.nn.Upsample(None, 2, "nearest"),  # 15
+            FeatureConcat(self.feature_storage, "b4"),  # 16
+            C3(128 + 128, 128, 2, False),  # 17
+            FeatureExporter(self.feature_storage, "x17"),
+            Conv(128, 128, 3, 2),  # 18
+            FeatureConcat(self.feature_storage, "x14"),  # 19
+            C3(256, 256, 2, False),  # 20
+            FeatureExporter(self.feature_storage, "x20"),
+            Conv(256, 256, 3, 2),  # 21
+            FeatureConcat(self.feature_storage, "x10"),  # 22
+            C3(512, 512, 2, False)  # 23
+        )
+
+    def forward(self, x):
+        x23 = self.inner(x)
+        x17 = self.feature_storage["x17"]
+        x20 = self.feature_storage["x20"]
+
+        self.feature_storage.clear()
+        return x17, x20, x23
+
+
 class Detect(Module):
     # YOLOv5 Detect head for detection models
-    stride = None  # strides computed during build
-    dynamic = False  # force grid reconstruction
 
     def __init__(self, nc: int, anchors: list, ch: list):  # detection layer
         super().__init__()
@@ -193,36 +256,6 @@ class Detect(Module):
         return grid, anchor_grid
 
 
-class BackBone(Module):
-    feature_storage: dict
-
-    def __init__(self):
-        super().__init__()
-
-        self.feature_storage = {}
-        self.inner = torch.nn.Sequential(
-            Conv(3, 32, 6, 2, 2),
-            Conv(32, 64, 3, 2),
-            C3(64, 64, 2),
-            Conv(64, 128, 3, 2),
-            FeatureExporter(self.feature_storage, "b4"),
-            C3(128, 128, 4),
-            Conv(128, 256, 3, 2),
-            FeatureExporter(self.feature_storage, "b6"),
-            C3(256, 256, 6),
-            Conv(256, 512, 3, 2),
-            C3(512, 512, 2),
-            SPPF(512, 512, 5)
-        )
-
-    def forward(self, x):
-        x = self.inner(x)
-        b4 = self.feature_storage.get("b4")
-        b6 = self.feature_storage.get("b6")
-        self.feature_storage.clear()
-        return x, b4, b6
-
-
 _ANCHORS = [
     [10, 13, 16, 30, 33, 23],
     [30, 61, 62, 45, 59, 119],
@@ -238,41 +271,11 @@ class NetWork(Module):
         self.feature_storage = {}
         self.backbone = BackBone()
 
-        self.head = torch.nn.ModuleList([
-            Conv(512, 256, 1, 1),
-            torch.nn.Upsample(None, 2, "nearest"),
-            # cat backbone P4
-            C3(256 + 256, 256, 2, False),
-            Conv(256, 128, 1, 1),
-            torch.nn.Upsample(None, 2, "nearest"),
-            # cat backbone P3
-            C3(128 + 128, 128, 2, False),
-            Conv(128, 128, 3, 2),
-            # cat head P4
-            C3(256, 256, 2, False),
-            Conv(256, 256, 3, 2),
-            # cat head P5
-            C3(512, 512, 2, False)
-        ])
-
         self.detect = Detect(nc=num_class, anchors=_ANCHORS, ch=[128, 256, 512])
 
     def forward(self, x):
-        x, b4, b6 = self.backbone(x)
-        x10 = self.head[0](x)  # 10
-        x = self.head[1](x10)
-        x = torch.cat([x, b6], 1)
-        x = self.head[2](x)  # 13
-        x14 = self.head[3](x)
-        x = self.head[4](x14)
-        x = torch.cat([x, b4], 1)
-        x17 = self.head[5](x)  # 17
-        x = self.head[6](x17)
-        x = torch.cat([x, x14], 1)
-        x20 = self.head[7](x)  # 20
-        x = self.head[8](x20)
-        x = torch.cat([x, x10], 1)
-        x23 = self.head[9](x)  # 23
+        x17, x20, x23 = self.backbone(x)
+
         x = self.detect([x17, x20, x23])
 
         return x
