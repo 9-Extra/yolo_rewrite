@@ -5,7 +5,6 @@ import numpy
 import yolo
 import torch
 
-from dataset.h5Dataset import ObjectRecord
 from preprocess import letterbox
 import cv2
 
@@ -37,7 +36,7 @@ def detect(network: yolo.Network.NetWork, images: list[str], label_names, device
             # cv2.imshow('diff2', numpy.fabs(numpy.diff(ori_img, axis=1, append=0)))
             # cv2.waitKey(0)
 
-            ori_img, ratio, (top, left) = letterbox(cv2.imread(img), [640, 640])
+            ori_img, ratio, (top, left) = letterbox(cv2.imread(img), (640, 640))
             h, w, _ = ori_img.shape
             img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB).transpose(2, 0, 1)[numpy.newaxis, ...]
             img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
@@ -54,7 +53,7 @@ def detect(network: yolo.Network.NetWork, images: list[str], label_names, device
 def main(weight_dir, img_dir):
     device = torch.device("cuda")
 
-    network = yolo.Network.NetWork(2)
+    network = yolo.Network.NetWork(1)
     network.load_state_dict(torch.load(weight_dir))
     network.eval().to(device, non_blocking=True)
 
@@ -66,4 +65,4 @@ def main(weight_dir, img_dir):
 
 
 if __name__ == '__main__':
-    main("weight/yolo_0.pth", r"G:\datasets\BirdVsDrone\Drones")
+    main("weight/yolo_2.pth", r"G:\datasets\BirdVsDrone\Drones")

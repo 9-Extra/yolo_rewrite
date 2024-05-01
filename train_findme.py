@@ -5,36 +5,27 @@ import cv2
 import yolo
 import torch
 from torch.utils.data import DataLoader
-from dataset.h5Dataset import H5DatasetYolo
+from dataset.h5Dataset import H5DatasetFindMe
 import tqdm
-from yolo.energy_ood import EnergyLoss
-
-
-def ood_finetune(network: torch.nn.Module, train_loader: DataLoader, ood_loader: DataLoader, epochs: int,
-                 save_path: str):
-    pass
 
 
 def train(network: torch.nn.Module, train_loader: DataLoader, epochs: int, save_path: str, save_interval: int):
     os.makedirs(save_path, exist_ok=True)
     device = next(network.parameters()).device
-    loss_func = yolo.loss.ComputeLoss(network)
+    loss_func = yolo.findme_loss.ComputeLoss(network)
     opt = torch.optim.Adam(network.parameters())
 
     network.train()
     for epoch in range(epochs):
-        for i, (img, target) in enumerate(tqdm.tqdm(train_loader, desc=f"epoch: {epoch} / {epochs}")):
-
-            # ori =cv2.cvtColor(img[0].transpose(1, 2, 0), cv2.COLOR_RGB2BGR)
-            # cv2.imshow("show", ori)
-            # cv2.waitKey(0)
+        for i, (img, target, y) in enumerate(tqdm.tqdm(train_loader, desc=f"epoch: {epoch} / {epochs}")):
 
             img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
-            target = torch.from_numpy(target).to(device, non_blocking=True)
+            target = torch.from_numpy(target).to(device, non_blocking=True).float() / 255
+            y = [torch.from_numpy(t).to(device, non_blocking=True) for t in y]
 
             opt.zero_grad()
-            output = network(img)
-            loss = loss_func(output, target)
+            output = network.forward(img, target)
+            loss = loss_func(output, y)
             loss.backward()
             opt.step()
 
@@ -49,14 +40,14 @@ def main(dataset_dir, start_weight_dir=None):
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
-    network = yolo.Network.NetWork(2)
+    network = yolo.FindMe.FindMe()
     if start_weight_dir:
         network.load_state_dict(torch.load(start_weight_dir))
     network.train().to(device, non_blocking=True)
 
-    dataset = H5DatasetYolo(dataset_dir)
+    dataset = H5DatasetFindMe(dataset_dir)
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
-                            collate_fn=H5DatasetYolo.collate_fn)
+                            collate_fn=H5DatasetFindMe.collate_fn)
 
     train(network, dataloader, 10, "weight", 1)
 

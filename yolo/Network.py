@@ -187,11 +187,11 @@ class Detect(Module):
         Processes input through YOLOv5 layers, altering shape for detection: `x(bs, 3, ny, nx, 85)`.
         网络输出的最后一维的格式为：[x坐标, y坐标, 宽度, 高度, 置信度, 每个类别的logit]
         """
-        ood_score = []
+        ood_feature = []
 
         for i in range(self.nl):
             if self.output_odd_feature:
-                ood_score.append(x[i].detach())
+                ood_feature.append(x[i].detach())
 
             x[i] = self.m[i](x[i])  # 检测头，就是1x1卷积，输出an * (nc + 5)的特征图
             # 然后，将an（每层的anchor数）和nc + 5（一个物体的特征数）单独切分到两个维度里, x(bs,255,20,20) to x(bs,3,20,20,85)
@@ -199,7 +199,7 @@ class Detect(Module):
             x[i] = x[i].contiguous()
 
         if self.output_odd_feature:
-            return x, ood_score
+            return x, ood_feature
         else:
             return x
 

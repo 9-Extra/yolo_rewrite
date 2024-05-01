@@ -106,60 +106,53 @@ class ComputeLoss:
         self.ssi = 0  # stride 16 index
         self.BCEcls, self.BCEobj, self.gr = BCEcls, BCEobj, 1.0
         self.na = m.na  # number of anchors
-        self.nc = m.nc  # number of classes
         self.nl = m.nl  # number of layers
         self.anchors = m.anchors
         self.device = device
 
-    def __call__(self, predictions, targets):  # predictions, targets
+    def __call__(self, predictions, targets_list):  # predictions, targets
         cls_loss = torch.zeros(1, device=self.device)  # class loss
         box_loss = torch.zeros(1, device=self.device)  # box loss
         conf_loss = torch.zeros(1, device=self.device)  # object loss
 
-        tcls_list, tbox_list, indices_list, anchors_list = self.build_targets(predictions, targets)  # targets
+        for i, targets in enumerate(targets_list):
+            tbox_list, indices_list, anchors_list = self.build_targets(predictions, targets)  # targets
+            # 计算每一层的loss
+            zipped_iter = zip(predictions, indices_list, tbox_list, anchors_list, self.balance)
+            # Losses
+            for pi, indices, tbox, anchors, balance_weight in zipped_iter:  # layer index, layer predictions
+                # pi的形状为[batch, anchor, gridy, gridx, 5+num_classes]
 
-        zipped_iter = zip(predictions, indices_list, tcls_list, tbox_list, anchors_list, self.balance)
-        # Losses
-        for pi, indices, tcls, tbox, anchors, balance_weight in zipped_iter:  # layer index, layer predictions
-            # pi的形状为[batch, anchor, gridy, gridx, 5+num_classes]
+                b, a, gj, gi = indices  # image, anchor, gridy, gridx
+                # b 包含此target的图片索引
+                # a 包含此target的anchor索引，包括所有在进行偏移和缩放后可能框住目标的anchor
+                # gi 包含此target的锚框x方向的索引
+                # gj 包含此target的锚框y方向的索引
 
-            b, a, gj, gi = indices  # image, anchor, gridy, gridx
-            # b 包含此target的图片索引
-            # a 包含此target的anchor索引，包括所有在进行偏移和缩放后可能框住目标的anchor
-            # gi 包含此target的锚框x方向的索引
-            # gj 包含此target的锚框y方向的索引
+                # 初始化目标置信度，如果没有目标，所有位置的锚框置信度都为0
+                target_conf = torch.zeros(pi.shape[:5], dtype=pi.dtype, device=self.device)
 
-            # 初始化目标置信度，如果没有目标，所有位置的锚框置信度都为0
-            target_conf = torch.zeros(pi.shape[:4], dtype=pi.dtype, device=self.device)
+                if b.shape[0] != 0:  # 如果有目标
+                    pxy, pwh, _ = pi[b, i, a, gj, gi].tensor_split((2, 4), dim=1)  # faster, requires torch 1.8.0
+                    # 从预测的值中取出对应锚框的预测结果，并且将其分割为xy、wh、置信度、类别
 
-            if b.shape[0] != 0:  # 如果有目标
-                pxy, pwh, _, pcls = pi[b, a, gj, gi].tensor_split((2, 4, 5), dim=1)  # faster, requires torch 1.8.0
-                # 从预测的值中取出对应锚框的预测结果，并且将其分割为xy、wh、置信度、类别
+                    # 回归，从模型输出值计算实际坐标
+                    # sigmoid会将值映射到0-1区间，然后本来应该减1，但是
+                    pxy = pxy.sigmoid() * 2 - 0.5
+                    pwh = (pwh.sigmoid() * 2) ** 2 * anchors
+                    pbox = torch.cat((pxy, pwh), 1)  # predicted box
+                    iou = bbox_iou(pbox, tbox, CIoU=True).squeeze()  # iou(prediction, target)
+                    box_loss += (1.0 - iou).mean()  # iou loss
 
-                # 回归，从模型输出值计算实际坐标
-                # sigmoid会将值映射到0-1区间，然后本来应该减1，但是
-                pxy = pxy.sigmoid() * 2 - 0.5
-                pwh = (pwh.sigmoid() * 2) ** 2 * anchors
-                pbox = torch.cat((pxy, pwh), 1)  # predicted box
-                iou = bbox_iou(pbox, tbox, CIoU=True).squeeze()  # iou(prediction, target)
-                box_loss += (1.0 - iou).mean()  # iou loss
+                    iou = iou.detach().clamp(0)
+                    # 在此填写置信度的拟合目标
+                    # 绝大多数的值都为0，只有索引指定的部分锚框的置信度才不是0
+                    target_conf[b, i, a, gj, gi] = iou  # iou ratio
 
-                iou = iou.detach().clamp(0)
-                # 在此填写置信度的拟合目标
-                # 绝大多数的值都为0，只有索引指定的部分锚框的置信度才不是0
-                target_conf[b, a, gj, gi] = iou  # iou ratio
-
-                # Classification
-                if self.nc > 1:  # cls loss (only if multiple classes)
-                    # self.cn, self.cp 是用于标签平滑的上下限
-                    t = torch.full_like(pcls, self.cn, device=self.device)  # targets
-                    t[range(pcls.shape[0]), tcls] = self.cp
-                    cls_loss += self.BCEcls(pcls, t)  # BCE
-
-            # 计算置信度估计的loss，置信度需要拟合预测出的bbox与真实bbox的iou
-            # 如果没有目标，则不产生iou loss和分类loss，但是需要计算置信度的loss，模型必须正确判断为没有目标
-            conf = pi[..., 4]
-            conf_loss += self.BCEobj(conf, target_conf) * balance_weight  # 对于不同层的不同大小锚框，加上不同权重来平衡
+                # 计算置信度估计的loss，置信度需要拟合预测出的bbox与真实bbox的iou
+                # 如果没有目标，则不产生iou loss和分类loss，但是需要计算置信度的loss，模型必须正确判断为没有目标
+                conf = pi[..., 4]
+                conf_loss += self.BCEobj(conf, target_conf) * balance_weight  # 对于不同层的不同大小锚框，加上不同权重来平衡
 
         box_loss *= 0.05
         conf_loss *= 1.0
@@ -168,14 +161,14 @@ class ComputeLoss:
 
         return (box_loss + conf_loss + cls_loss) * bs
 
-    def build_targets(self, p, targets):
+    def build_targets(self, prediction, targets):
         """
         Prepares model targets from input targets (image,class,x,y,w,h) for loss computation, returning class, box,
         indices, and anchors.
         """
         na, nt = self.na, targets.shape[0]  # number of anchors, targets
         tcls, tbox, indices, anch = [], [], [], []
-        gain = torch.ones(7, device=self.device)  # normalized to gridspace gain
+        gain = torch.ones(6, device=self.device)  # normalized to gridspace gain
         # 生成与targets形状一致的anchor_index
         ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
         # 将targets复制na次，再与anchor_index合并，这样每个anchor都有一个targets，并且可以通过anchor_index判断是哪一个anchor
@@ -187,24 +180,24 @@ class ComputeLoss:
 
         for i in range(self.nl):
             # 遍历每一层，获取该层的anchors和输出大小（也是特征图大小和输出bbox数）
-            anchors, shape = self.anchors[i], p[i].shape
-            grid_w, gird_h = shape[3], shape[2]
+            anchors, shape = self.anchors[i], prediction[i].shape
+            grid_w, gird_h = shape[4], shape[3]
             # gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
-            gain[2], gain[3], gain[4], gain[5] = grid_w, gird_h, grid_w, gird_h
+            gain[1], gain[2], gain[3], gain[4] = grid_w, gird_h, grid_w, gird_h
 
             # Match targets to anchors
-            t = targets * gain  # 映射到相对特征图的坐标，格式为(image ,class, x, y, w, h, anchor_index)
+            t = targets * gain  # 映射到相对特征图的坐标，格式为(image, class, x, y, w, h, anchor_index)
             if nt:
                 # Matches
-                wh = t[..., 4:6]
+                wh = t[..., 3:5]
                 r = wh / anchors[:, None]  # wh 的目标缩放比例
                 filter_mash = torch.max(r, 1 / r).max(2)[0] < 4.0  # 只有缩放比小于4的目标才需要被拟合，其它的过滤掉
                 # filter_mash = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
                 t = t[filter_mash]  # filter
 
                 # Offsets
-                gxy = t[:, 2:4]  # 目标在特征图中的坐标
-                gxi = gain[[2, 3]] - gxy  # 映射到相对于锚框的坐标（偏移量）
+                gxy = t[:, 1:3]  # 目标在特征图中的坐标
+                gxi = gain[[1, 2]] - gxy  # 映射到相对于锚框的坐标（偏移量）
                 j, k = ((gxy % 1 < g) & (gxy > 1)).T
                 l, m = ((gxi % 1 < g) & (gxi > 1)).T
                 j = torch.stack((torch.ones_like(j), j, k, l, m))
@@ -215,15 +208,14 @@ class ComputeLoss:
                 offsets = 0
 
             # Define
-            bc, gxy, gwh, a = t.chunk(4, 1)  # (image, class), grid xy, grid wh, anchors
-            a, (b, c) = a.long().view(-1), bc.long().T  # anchors, image, class
+            bc, gxy, gwh, a = t.split((1, 2, 2, 1), 1)  # (image, class), grid xy, grid wh, anchors
+            a, b = a.long().view(-1), bc.long().view(-1)  # anchors, image, class
             gij = (gxy - offsets).long()
             gi, gj = gij.T  # grid indices
 
             # Append
-            indices.append((b, a, gj.clamp_(0, shape[2] - 1), gi.clamp_(0, shape[3] - 1)))  # image, anchor, grid
+            indices.append((b, a, gj.clamp_(0, gird_h - 1), gi.clamp_(0, grid_w - 1)))  # image, anchor, grid
             tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
             anch.append(anchors[a])  # anchors
-            tcls.append(c)  # class
 
-        return tcls, tbox, indices, anch
+        return tbox, indices, anch

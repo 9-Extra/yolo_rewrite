@@ -1,8 +1,8 @@
 import tqdm
 from PIL import Image
 
-from . import CocoDataset
-from .RawDataset import DataItem
+from dataset import CocoDataset
+from dataset.RawDataset import DataItem
 
 
 class CocoBird(CocoDataset.CocoDataset):

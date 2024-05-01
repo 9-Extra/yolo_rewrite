@@ -211,6 +211,8 @@ def main(weight_path: str, data_path: str):
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
+    print(f"正在验证网络{weight_path}， 使用数据集{data_path}")
+
     network = yolo.Network.NetWork(2)
     network.load_state_dict(torch.load(weight_path))
     network.eval().to(device, non_blocking=True)
@@ -227,5 +229,5 @@ def main(weight_path: str, data_path: str):
 
 
 if __name__ == '__main__':
-    main("weight/yolo.pth", "preprocess/drone_val")
+    main("weight/yolo_0.pth", "preprocess/drone_val")
     main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")
