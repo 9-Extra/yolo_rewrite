@@ -2,6 +2,8 @@ import torch
 from torch.nn import Module
 import einops
 
+from yolo.ood_score import ResidualScore
+
 
 class FeatureExporter(Module):
     storage: dict
@@ -164,6 +166,7 @@ class BackBone(Module):
 
 class Detect(Module):
     # YOLOv5 Detect head for detection models
+    ood_evaluator: torch.nn.ModuleList  # 外部嵌入
 
     def __init__(self, nc: int, anchors: list, ch: list):  # detection layer
         super().__init__()
@@ -174,8 +177,11 @@ class Detect(Module):
         self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
         self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
         self.register_buffer("anchors", torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
-        self.m = torch.nn.ModuleList(torch.nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
-
+        self.m = torch.nn.ModuleList(
+            torch.nn.Conv2d(x, self.no * self.na, 1)
+            for x in ch
+        )  # output conv
+        self.ood_evaluator = torch.nn.ModuleList(ResidualScore(x, x // 2) for x in ch)
         self.output_odd_feature = False
 
         s = 256  # 2x min stride
@@ -191,7 +197,7 @@ class Detect(Module):
 
         for i in range(self.nl):
             if self.output_odd_feature:
-                ood_feature.append(x[i].detach())
+                ood_feature.append(einops.rearrange(x[i].detach(), "b c ny nx -> b ny nx c"))
 
             x[i] = self.m[i](x[i])  # 检测头，就是1x1卷积，输出an * (nc + 5)的特征图
             # 然后，将an（每层的anchor数）和nc + 5（一个物体的特征数）单独切分到两个维度里, x(bs,255,20,20) to x(bs,3,20,20,85)
@@ -203,7 +209,7 @@ class Detect(Module):
         else:
             return x
 
-    def inference_post_process(self, x):
+    def inference_post_process(self, x, ood_feature: list[torch.Tensor] | None=None):
         # 网络输出的x是基于anchor的偏移量，需要转换成基于整个图像的坐标
         z = []
         for i in range(self.nl):
@@ -218,7 +224,7 @@ class Detect(Module):
             # grid是网格中心点，anchor_grid是网格的大小
             # 这个sigmoid会对输入的所有数进行sigmoid，因为恰好结果中的每一项每个数都需要sigmoid
             x[i].sigmoid_()
-            xy, wh, conf_and_cls_logit = x[i].split((2, 2, 1 + self.nc), 4)
+            xy, wh, conf, logit = x[i].split((2, 2, 1, self.nc), 4)
             # xy * 2将结果映射到(0, 2)，再-1得到相对锚框中心点的偏移量(-1, 1)
             # 这个偏移量加上锚框中心点的位置gird得到bbox中心点在整个图像中的绝对坐标
             # 但这个坐标是基于该层的特征图的，每层的结果都是从特征图中通过1x1卷积提取出来，则每个锚框对应该层的特征图上的一个像素
@@ -230,9 +236,16 @@ class Detect(Module):
             # 这样通过一次乘法就可以直接得到bbox相对原图像的大小
             wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
 
-            y = torch.cat((xy, wh, conf_and_cls_logit), 4)
-            # 将所有位置的所有锚框的结果都合并到一个维度，因为是哪个锚框得出的结果对于后面的处理并不重要
-            y = y.view(bs, self.na * nx * ny, self.no)
+            if ood_feature:
+                assert self.ood_evaluator, "需要存在ood求值模块"
+                ood_score = self.ood_evaluator[i](ood_feature[i]).unsqueeze(1).expand(1, self.na, -1, -1).unsqueeze(-1)
+            else:
+                ood_score = torch.zeros_like(conf)
+
+            y = torch.cat((xy, wh, conf, ood_score, logit), 4)
+
+            # 将所有位置的所有锚框的结果都合并到一个维度
+            y = y.view(bs, self.na * nx * ny, y.shape[-1])
             z.append(y)
 
         # 合并所有层的结果，因为是哪一层的结果对后面的处理也不重要
@@ -282,6 +295,6 @@ class NetWork(Module):
 
 
 if __name__ == '__main__':
-    network = NetWork(80)
+    network = NetWork(1)
     network(torch.rand((1, 3, 256, 256)))
     print(network)

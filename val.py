@@ -5,7 +5,7 @@ import torchvision.ops
 import yolo
 import torch
 from torch.utils.data import DataLoader
-from dataset.h5Dataset import H5Dataset
+from dataset.h5Dataset import H5DatasetYolo
 import tqdm
 
 from yolo.non_max_suppression import non_max_suppression
@@ -193,7 +193,9 @@ def val(network: torch.nn.Module, train_loader: DataLoader):
                 # Evaluate
                 if nl != 0:
                     correct = process_batch(pred, labels, iouv)
-                stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
+                conf = pred[:, 4]
+                cls = pred[:, 6]
+                stats.append((correct, conf, cls, labels[:, 0]))  # (correct, conf, pcls, tcls)
         pass
 
     stats = [torch.cat(x, 0).numpy(force=True) for x in zip(*stats)]  # to numpy
@@ -213,14 +215,14 @@ def main(weight_path: str, data_path: str):
 
     print(f"正在验证网络{weight_path}， 使用数据集{data_path}")
 
-    network = yolo.Network.NetWork(2)
+    network = yolo.Network.NetWork(1)
     network.load_state_dict(torch.load(weight_path))
     network.eval().to(device, non_blocking=True)
 
-    dataset = H5Dataset(data_path)
+    dataset = H5DatasetYolo(data_path)
     print("样本数：", len(dataset))
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
-                            collate_fn=H5Dataset.collate_fn)
+                            collate_fn=H5DatasetYolo.collate_fn)
 
     with torch.no_grad():
         val(network, dataloader)
@@ -229,5 +231,5 @@ def main(weight_path: str, data_path: str):
 
 
 if __name__ == '__main__':
-    main("weight/yolo_0.pth", "preprocess/drone_val")
-    main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")
+    main("weight/yolo_original_ood.pth", "preprocess/pure_drone_train_val/data.h5")
+    # main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")

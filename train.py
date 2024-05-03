@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from dataset.h5Dataset import H5DatasetYolo
 import tqdm
 from yolo.energy_ood import EnergyLoss
+from yolo.ood_score import build_residual_score
 
 
 def ood_finetune(network: torch.nn.Module, train_loader: DataLoader, ood_loader: DataLoader, epochs: int,
@@ -15,16 +16,22 @@ def ood_finetune(network: torch.nn.Module, train_loader: DataLoader, ood_loader:
     pass
 
 
-def train(network: torch.nn.Module, train_loader: DataLoader, epochs: int, save_path: str, save_interval: int):
+def train(network: torch.nn.Module,
+          opt: torch.optim.Optimizer,
+          train_loader: DataLoader,
+          epochs: int,
+          save_path: str,
+          save_interval: int
+          ):
     os.makedirs(save_path, exist_ok=True)
     device = next(network.parameters()).device
+
     loss_func = yolo.loss.ComputeLoss(network)
-    opt = torch.optim.Adam(network.parameters())
 
     network.train()
+    loss = torch.zeros([1])
     for epoch in range(epochs):
         for i, (img, target) in enumerate(tqdm.tqdm(train_loader, desc=f"epoch: {epoch} / {epochs}")):
-
             # ori =cv2.cvtColor(img[0].transpose(1, 2, 0), cv2.COLOR_RGB2BGR)
             # cv2.imshow("show", ori)
             # cv2.waitKey(0)
@@ -39,29 +46,65 @@ def train(network: torch.nn.Module, train_loader: DataLoader, epochs: int, save_
             opt.step()
 
         if epoch % save_interval == 0:
-            torch.save(network.state_dict(), os.path.join(save_path, f"yolo_{epoch}.pth"))
+            torch.save({
+                "num_class": network.detect.nc,
+                "network": network.state_dict(),
+                "optimizer": opt.state_dict(),
+                "epoch": epoch
+            }, os.path.join(save_path, f"yolo_checkpoint_{epoch}.pth"))
             print(f"Loss: {loss.item()}")
 
-    torch.save(network.state_dict(), os.path.join(save_path, f"yolo_original.pth"))
+    # torch.save(network.state_dict(), os.path.join(save_path, f"yolo_original.pth"))
 
 
-def main(dataset_dir, start_weight_dir=None):
+def build_ood_eval(network: yolo.Network.NetWork, train_loader: DataLoader):
+    print("开始构造ood求值")
+    build_residual_score(network, train_loader)
+
+
+def main(dataset_dir, checkpoint=None):
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
-    network = yolo.Network.NetWork(2)
-    if start_weight_dir:
-        network.load_state_dict(torch.load(start_weight_dir))
+    num_class = 1
+    epoch = 10
+
+    if checkpoint:
+        state_dict = torch.load(checkpoint)
+        num_class = state_dict["num_class"]
+        start_epoch = state_dict["epoch"]
+        network = yolo.Network.NetWork(num_class)
+        network.load_state_dict(checkpoint["network"])
+        opt = torch.optim.Adam(network.parameters())
+        opt.load_state_dict(state_dict["optimizer"])
+        print(f"从一个已训练{start_epoch}轮的模型{os.path.abspath(checkpoint)}开始")
+    else:
+        network = yolo.Network.NetWork(num_class)
+        opt = torch.optim.Adam(network.parameters())
+
     network.train().to(device, non_blocking=True)
 
     dataset = H5DatasetYolo(dataset_dir)
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
-                            collate_fn=H5DatasetYolo.collate_fn)
+    dataloader = DataLoader(dataset,
+                            batch_size=8,
+                            shuffle=True,
+                            num_workers=0,
+                            pin_memory=True,
+                            collate_fn=H5DatasetYolo.collate_fn
+                            )
 
-    train(network, dataloader, 10, "weight", 1)
+    train(network, opt, dataloader, epoch, "weight", 1000)
+    build_ood_eval(network, dataloader)
+
+    torch.save({
+        "num_class": num_class,
+        "network": network.state_dict(),
+        "epoch": epoch,
+        "label_names": dataset.get_label_names()
+    }, os.path.join("weight", f"yolo_final.pth"))
 
 
 pass
 
 if __name__ == '__main__':
-    main("preprocess/pure_drone_train/data.h5")
+    main("preprocess/pure_drone_train_1000.h5")

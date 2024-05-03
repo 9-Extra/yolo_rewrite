@@ -67,10 +67,17 @@ def _box_iou_with_area(box1, box2):
 #
 #     return prediction[keep, :][:, [0, 1, 2, 3, 5, 6]]
 def non_max_suppression(prediction: torch.Tensor, conf_threshold=0.25, iou_threshold=0.45):
-    num_classes = prediction.shape[-1] - 5
-    conf = prediction[..., 4] * torch.max(prediction[..., 5:], dim=-1)[0]
-    prediction[..., 4] = conf
+    # [x y w h conf cls]
+    num_classes = prediction.shape[-1] - 6
+    if num_classes > 1:
+        conf = prediction[..., 4] * torch.max(prediction[..., 6:], dim=-1)[0]
+        prediction[..., 4] = conf
+    else:
+        conf = prediction[..., 4]
+
     prediction = prediction[conf > conf_threshold]
+    del conf
+
     xy, wh, conf, _ = prediction.tensor_split([2, 4, 5], dim=-1)
 
     x1y1 = xy - wh / 2
@@ -79,10 +86,12 @@ def non_max_suppression(prediction: torch.Tensor, conf_threshold=0.25, iou_thres
     keep = torchvision.ops.nms(boxes, conf.squeeze(1), iou_threshold)
 
     prediction = prediction[keep]
-    xy, wh, conf, class_prediction = prediction.split([2, 2, 1, num_classes], dim=-1)
-    value, class_prediction = torch.max(class_prediction, dim=-1, keepdim=True)
+
+    xy, wh, conf, ood_score, class_prediction = prediction.split([2, 2, 1, 1, num_classes], dim=-1)
     x1y1 = xy - wh / 2
     x2y2 = xy + wh / 2
-    prediction = torch.cat([x1y1, x2y2, value * conf, class_prediction.float()], -1)
+
+    class_prediction = torch.argmax(class_prediction, dim=-1, keepdim=True)
+    prediction = torch.cat([x1y1, x2y2, conf, ood_score, class_prediction.float()], -1)
 
     return prediction

@@ -60,19 +60,12 @@ def crop_image(img: numpy.ndarray, bbox, size: tuple[int, int]):
     return img
 
 
-def process_data(origin_img: str, objs: list, target_size: tuple[int, int], sub_image_size: tuple[int, int],
-                 include_sub_images=True):
+def process_data(origin_img: str, objs: list, target_size: tuple[int, int]):
     origin_img = cv2.imread(origin_img)
     img, ratio, (top, left) = letterbox(origin_img, target_size)
     mapped_objs = numpy.empty((len(objs), 5), dtype=numpy.float32)
-    bbox_sub_images = []
     for i, obj in enumerate(objs):
         x, y, width, height = obj[1]
-        if include_sub_images:
-            sub_img = crop_image(origin_img, (x, y, width, height), sub_image_size)
-            cv2.cvtColor(sub_img, cv2.COLOR_BGR2RGB, sub_img)
-            bbox_sub_images.append(sub_img.transpose(2, 0, 1))
-
         # center x, center y, width, height
         x = ((x + width / 2) * ratio[0] + left) / target_size[0]
         y = ((y + height / 2) * ratio[1] + top) / target_size[1]
@@ -81,25 +74,26 @@ def process_data(origin_img: str, objs: list, target_size: tuple[int, int], sub_
 
         mapped_objs[i] = [obj[0], x, y, width, height]
 
-    cv2.cvtColor(img, cv2.COLOR_BGR2RGB, img)
+    cv2.cvtColor(img, cv2.COLOR_BGR2HSV_FULL, img)
+    # cv2.cvtColor(img, cv2.COLOR_HSV2BGR_FULL, img)
+    # cv2.imshow("show", img)
+    # cv2.waitKey()
     img = img.transpose(2, 0, 1)
 
-    return img, mapped_objs, numpy.stack(bbox_sub_images) if include_sub_images else None
+    return img, mapped_objs
 
 
-def main(dist_dir: str, data: RawDataset, include_sub_images=False):
-    os.makedirs(dist_dir, exist_ok=True)
+def main(dist: str, data: RawDataset):
+    os.makedirs(os.path.dirname(dist), exist_ok=True)
     target_size = [640, 640]
-    sub_image_size = [32, 32]
-    process = functools.partial(process_data, target_size=target_size, sub_image_size=sub_image_size, include_sub_images=include_sub_images)
+
+    process = functools.partial(process_data, target_size=target_size)
 
     image_count = len(data)
     bbox_count = sum(len(d.objs) for d in data)
-    with h5py.File(os.path.join(dist_dir, "data.h5"), "w") as h5f:
+    with h5py.File(dist, "w") as h5f:
         images: h5py.Dataset = h5f.create_dataset("image", (image_count, 3, *target_size), dtype=numpy.uint8)
         bbox_idx: h5py.Dataset = h5f.create_dataset("bbox_idx", (image_count, 2), dtype=numpy.uint32)
-        if include_sub_images:
-            sub_images: h5py.Dataset = h5f.create_dataset("sub_image", (bbox_count, 3, *sub_image_size), dtype=numpy.uint8)
         bbox: h5py.Dataset = h5f.create_dataset("bbox", (bbox_count, 5), dtype=numpy.float32)
 
         h5f.create_dataset("obj_name", data=data.get_label_names(), dtype=h5py.special_dtype(vlen=str))
@@ -107,16 +101,13 @@ def main(dist_dir: str, data: RawDataset, include_sub_images=False):
         bbox_idx_offset = 0
         for i, d in enumerate(tqdm.tqdm(data, total=image_count)):
             # data.display(i)
-            img, mapped_objs, bbox_sub_images = process(d.img, d.objs)
+            img, mapped_objs = process(d.img, d.objs)
             bbox_num = mapped_objs.shape[0]
 
             images.write_direct(numpy.ascontiguousarray(img), dest_sel=i)
-            bbox_idx.write_direct(numpy.array([bbox_idx_offset, bbox_idx_offset + bbox_num], dtype=numpy.uint32),
+            slice_ = slice(bbox_idx_offset, bbox_idx_offset + bbox_num)
+            bbox_idx.write_direct(numpy.array([slice_.start, slice_.stop], dtype=numpy.uint32),
                                   dest_sel=i)
-            slice_ = numpy.s_[bbox_idx_offset: bbox_idx_offset + bbox_num]
-            if include_sub_images:
-                sub_img = numpy.ascontiguousarray(bbox_sub_images)
-                sub_images.write_direct(sub_img, dest_sel=slice_)
             bbox.write_direct(mapped_objs, dest_sel=slice_)
             bbox_idx_offset += bbox_num
 
@@ -129,4 +120,4 @@ if __name__ == '__main__':
     # coco_bird = dataset = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
     # mixed = mix_raw_dataset([drone, bird, coco_bird])
     # mixed = mix_raw_dataset(drone)
-    main("preprocess/pure_drone_train", drone)
+    main("preprocess/pure_drone_train_1000.h5", drone)

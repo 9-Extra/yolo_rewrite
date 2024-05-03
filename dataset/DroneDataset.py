@@ -29,7 +29,7 @@ class DroneDataset(RawDataset):
         ann_dir = os.path.join(root, "Drone_TrainSet_XMLs")
 
         self.items: list[DataItem] = []
-        for xml in tqdm.tqdm(os.listdir(ann_dir)):
+        for xml in tqdm.tqdm(os.listdir(ann_dir)[:1000]):
             filename, res = parse_xml(os.path.join(ann_dir, xml))
             self.items.append(DataItem(os.path.join(img_dir, filename), res))
         pass
