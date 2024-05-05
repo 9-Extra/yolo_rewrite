@@ -67,14 +67,14 @@ def main(dataset_dir, checkpoint=None):
     torch.backends.cudnn.benchmark = True
 
     num_class = 1
-    epoch = 10
+    epoch = 0
 
     if checkpoint:
         state_dict = torch.load(checkpoint)
         num_class = state_dict["num_class"]
         start_epoch = state_dict["epoch"]
         network = yolo.Network.NetWork(num_class)
-        network.load_state_dict(checkpoint["network"])
+        network.load_state_dict(state_dict["network"])
         opt = torch.optim.Adam(network.parameters())
         opt.load_state_dict(state_dict["optimizer"])
         print(f"从一个已训练{start_epoch}轮的模型{os.path.abspath(checkpoint)}开始")
@@ -93,7 +93,7 @@ def main(dataset_dir, checkpoint=None):
                             collate_fn=H5DatasetYolo.collate_fn
                             )
 
-    train(network, opt, dataloader, epoch, "weight", 1000)
+    # train(network, opt, dataloader, epoch, "weight", 1)
     build_ood_eval(network, dataloader)
 
     torch.save({
@@ -101,10 +101,10 @@ def main(dataset_dir, checkpoint=None):
         "network": network.state_dict(),
         "epoch": epoch,
         "label_names": dataset.get_label_names()
-    }, os.path.join("weight", f"yolo_final.pth"))
+    }, os.path.join("weight", f"yolo_final_full_20.pth"))
 
 
 pass
 
 if __name__ == '__main__':
-    main("preprocess/pure_drone_train_1000.h5")
+    main("preprocess/pure_drone_train_full.h5", "weight/yolo_checkpoint_7.pth")

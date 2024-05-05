@@ -2,24 +2,6 @@ import torch
 import torchvision
 
 
-def box_iou(box1, box2):
-    left = torch.max(box1[..., 0], box2[..., 0])
-    right = torch.min(box1[..., 2], box2[..., 2])
-    top = torch.max(box1[..., 1], box2[..., 1])
-    bottom = torch.min(box1[..., 3], box2[..., 3])
-
-    width = torch.clamp(right - left, min=0)
-    height = torch.clamp(bottom - top, min=0)
-    box1_area = (box1[..., 2] - box1[..., 0]) * (box1[..., 3] - box1[..., 1])
-    box2_area = (box2[..., 2] - box2[..., 0]) * (box2[..., 3] - box2[..., 1])
-
-    overlap = width * height
-
-    iou = overlap / (box1_area + box2_area - overlap)
-
-    return iou
-
-
 def _box_iou_with_area(box1, box2):
     # box1 = [x1, y1, x2, y2, area]
     # box2 = [x1, y1, x2, y2, area]

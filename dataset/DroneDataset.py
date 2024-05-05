@@ -29,9 +29,10 @@ class DroneDataset(RawDataset):
         ann_dir = os.path.join(root, "Drone_TrainSet_XMLs")
 
         self.items: list[DataItem] = []
-        for xml in tqdm.tqdm(os.listdir(ann_dir)[:1000]):
+        for xml in tqdm.tqdm(os.listdir(ann_dir)):
             filename, res = parse_xml(os.path.join(ann_dir, xml))
-            self.items.append(DataItem(os.path.join(img_dir, filename), res))
+            if len(res) != 0:
+                self.items.append(DataItem(os.path.join(img_dir, filename), res))
         pass
 
         sp = int(len(self.items) * 0.8)

@@ -11,6 +11,21 @@ import tqdm
 from yolo.non_max_suppression import non_max_suppression
 
 
+def box_iou(box1, box2):
+    left_top = numpy.maximum(box1[:, None, :2], box2[:, :2])  # [N,M,2]
+    right_bottom = numpy.minimum(box1[:, None, 2:], box2[:, 2:])  # [N,M,2]
+
+    width_height = numpy.maximum(right_bottom - left_top, 0)
+
+    box1_area = (box1[..., 2] - box1[..., 0]) * (box1[..., 3] - box1[..., 1])
+    box2_area = (box2[..., 2] - box2[..., 0]) * (box2[..., 3] - box2[..., 1])
+
+    overlap = numpy.prod(width_height, axis=-1)
+
+    iou = overlap / (box1_area + box2_area - overlap)
+
+    return iou
+
 def display(img: numpy.ndarray, objs, gt, label_names):
     for obj in objs:
         x1, y1, x2, y2, conf, cls = [x.item() for x in obj.cpu()]
@@ -65,7 +80,7 @@ def compute_ap(recall, precision):
     return ap, mpre, mrec
 
 
-def ap_per_class(tp, conf, pred_cls, target_cls, eps=1e-16):
+def ap_per_class(stat, eps=1e-16):
     """
     Compute the average precision, given the recall and precision curves.
 
@@ -80,8 +95,9 @@ def ap_per_class(tp, conf, pred_cls, target_cls, eps=1e-16):
     """
 
     # Sort by objectness
+    tp, conf, ood_score, pred_cls, target_cls = stat
     i = numpy.argsort(-conf)
-    tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
+    tp, conf, ood_score, pred_cls = tp[i], ood_score[i], conf[i], pred_cls[i]
 
     # Find unique classes
     unique_classes, nt = numpy.unique(target_cls, return_counts=True)
@@ -120,7 +136,7 @@ def ap_per_class(tp, conf, pred_cls, target_cls, eps=1e-16):
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
     tp = (r * nt).round()  # true positives
     fp = (tp / (p + eps) - tp).round()  # false positives
-    return tp, fp, p, r, f1, ap, unique_classes.astype(int)
+    return tp, fp, p, r, f1, ap, ood_score
 
 
 def process_batch(detections, labels, iouv):
@@ -133,19 +149,20 @@ def process_batch(detections, labels, iouv):
     Returns:
         correct (array[N, 10]), for 10 IoU levels
     """
-    correct = numpy.zeros((detections.shape[0], iouv.shape[0])).astype(bool)
-    iou = torchvision.ops.box_iou(labels[:, 1:], detections[:, :4])
+    correct = numpy.zeros((detections.shape[0], iouv.shape[0]), dtype=bool)
+    # torchvision.ops.box_iou()
+    iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
     for i in range(len(iouv)):
-        x = torch.where((iou >= iouv[i]) & correct_class)  # IoU > threshold and classes match
+        x = numpy.where((iou >= iouv[i]) & correct_class)  # IoU > threshold and classes match
         if x[0].shape[0]:
-            matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()  # [label, detect, iou]
+            matches = numpy.concatenate((numpy.stack(x, 1), iou[x[0], x[1]][:, None]), 1)  # [label, detect, iou]
             if x[0].shape[0] > 1:
                 matches = matches[matches[:, 2].argsort()[::-1]]
                 matches = matches[numpy.unique(matches[:, 1], return_index=True)[1]]
                 matches = matches[numpy.unique(matches[:, 0], return_index=True)[1]]
             correct[matches[:, 1].astype(int), i] = True
-    return torch.tensor(correct, dtype=torch.bool, device=iouv.device)
+    return correct
 
 
 def val(network: torch.nn.Module, train_loader: DataLoader):
@@ -153,8 +170,8 @@ def val(network: torch.nn.Module, train_loader: DataLoader):
 
     network.eval()
 
-    iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
-    niou = iouv.numel()
+    iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
+    niou = iouv.size
     mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0
     fp = 0.0
     stats = []
@@ -174,33 +191,35 @@ def val(network: torch.nn.Module, train_loader: DataLoader):
         output = network(img)
         output = network.detect.inference_post_process(output)
         for i, pred in enumerate(output):
-            pred = non_max_suppression(pred)
+            pred = non_max_suppression(pred).numpy(force=True)
 
-            labels = target[target[:, 0] == i, 1:]
+            labels = target[target[:, 0] == i, 1:].numpy(force=True)
 
             # ori_img = cv2.cvtColor(img[i].numpy(force=True).transpose(1, 2, 0), cv2.COLOR_RGB2BGR)
             # display(ori_img, pred, labels, train_loader.dataset.obj_record.label_names)
 
             nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
 
-            correct = torch.zeros([npr, niou], dtype=torch.bool, device=device)  # init
-
             if npr == 0:
                 # 没有预测任何东西
-                if nl != 0:
-                    stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
+                if nl != 0:  # 但是实际上有东西
+                    correct = numpy.zeros([nl, niou], dtype=bool)  # 全错
+                    stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
             else:
                 # Evaluate
                 if nl != 0:
                     correct = process_batch(pred, labels, iouv)
+                else:
+                    correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
                 conf = pred[:, 4]
+                ood_score = pred[:, 5]
                 cls = pred[:, 6]
-                stats.append((correct, conf, cls, labels[:, 0]))  # (correct, conf, pcls, tcls)
+                stats.append((correct, conf, ood_score, cls, labels[:, 0]))  # (correct, conf, pcls, tcls)
         pass
 
-    stats = [torch.cat(x, 0).numpy(force=True) for x in zip(*stats)]  # to numpy
+    stats = [numpy.concatenate(x, 0) for x in zip(*stats)]  # to numpy
     if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats)
+        tp, fp, p, r, f1, ap, ood_score = ap_per_class(stats)
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map, fp = p.mean(), r.mean(), ap50.mean(), ap.mean(), fp.mean()
 
@@ -215,8 +234,8 @@ def main(weight_path: str, data_path: str):
 
     print(f"正在验证网络{weight_path}， 使用数据集{data_path}")
 
-    network = yolo.Network.NetWork(1)
-    network.load_state_dict(torch.load(weight_path))
+    network, _ = yolo.Network.load_network(weight_path)
+
     network.eval().to(device, non_blocking=True)
 
     dataset = H5DatasetYolo(data_path)
@@ -231,5 +250,5 @@ def main(weight_path: str, data_path: str):
 
 
 if __name__ == '__main__':
-    main("weight/yolo_original_ood.pth", "preprocess/pure_drone_train_val/data.h5")
+    main("weight/yolo_final_full_20.pth", "preprocess/pure_drone_val_200.h5")
     # main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")

@@ -1,3 +1,5 @@
+import os
+
 import torch
 from torch.nn import Module
 import einops
@@ -166,7 +168,7 @@ class BackBone(Module):
 
 class Detect(Module):
     # YOLOv5 Detect head for detection models
-    ood_evaluator: torch.nn.ModuleList  # 外部嵌入
+    ood_evaluator: torch.nn.ModuleList
 
     def __init__(self, nc: int, anchors: list, ch: list):  # detection layer
         super().__init__()
@@ -209,7 +211,7 @@ class Detect(Module):
         else:
             return x
 
-    def inference_post_process(self, x, ood_feature: list[torch.Tensor] | None=None):
+    def inference_post_process(self, x, ood_feature: list[torch.Tensor] | None = None):
         # 网络输出的x是基于anchor的偏移量，需要转换成基于整个图像的坐标
         z = []
         for i in range(self.nl):
@@ -292,6 +294,23 @@ class NetWork(Module):
         x = self.detect([x17, x20, x23])
 
         return x
+
+
+def load_network(weight_path: str) -> tuple[NetWork, list[str]]:
+    state_dict: dict = torch.load(weight_path)
+    num_class = state_dict["num_class"]
+    network = NetWork(num_class)
+    network.load_state_dict(state_dict["network"])
+
+    print(f"成功从{os.path.abspath(weight_path)}加载模型权重")
+    if "label_names" in state_dict:
+        label_names = state_dict["label_names"]
+        print("获取标签名称：", label_names)
+    else:
+        print("获取标签失败，自动生成标签")
+        label_names = list(str(i + 1) for i in range(num_class))
+
+    return network, label_names
 
 
 if __name__ == '__main__':

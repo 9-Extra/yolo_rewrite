@@ -47,21 +47,10 @@ def detect(network: yolo.Network.NetWork, images: list[str], label_names, device
     pass
 
 
-def main(weight_dir, img_dir):
+def main(weight_path, img_dir):
     device = torch.device("cuda")
 
-    state_dict: dict = torch.load(weight_dir)
-    num_class = state_dict["num_class"]
-    network = yolo.Network.NetWork(num_class)
-    network.load_state_dict(state_dict["network"])
-
-    print(f"成功从{os.path.abspath(weight_dir)}加载模型权重")
-    if "label_names" in state_dict:
-        label_names = state_dict["label_names"]
-        print("获取标签名称：", label_names)
-    else:
-        print("获取标签失败，自动生成标签")
-        label_names = list(str(i + 1) for i in range(num_class))
+    network, label_names = yolo.Network.load_network(weight_path)
 
     network.eval().to(device, non_blocking=True)
 
@@ -73,4 +62,4 @@ def main(weight_dir, img_dir):
 
 
 if __name__ == '__main__':
-    main("weight/yolo_final.pth", r"G:\datasets\BirdVsDrone\Drones")
+    main("weight/yolo_final_full_20.pth", r"G:\datasets\BirdVsDrone\Drones")

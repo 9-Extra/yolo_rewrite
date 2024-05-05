@@ -104,6 +104,7 @@ def main(dist: str, data: RawDataset):
             img, mapped_objs = process(d.img, d.objs)
             bbox_num = mapped_objs.shape[0]
 
+            assert bbox_idx != 0
             images.write_direct(numpy.ascontiguousarray(img), dest_sel=i)
             slice_ = slice(bbox_idx_offset, bbox_idx_offset + bbox_num)
             bbox_idx.write_direct(numpy.array([slice_.start, slice_.stop], dtype=numpy.uint32),
@@ -120,4 +121,4 @@ if __name__ == '__main__':
     # coco_bird = dataset = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
     # mixed = mix_raw_dataset([drone, bird, coco_bird])
     # mixed = mix_raw_dataset(drone)
-    main("preprocess/pure_drone_train_1000.h5", drone)
+    main("preprocess/pure_drone_train_full.h5", drone)
