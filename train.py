@@ -59,7 +59,7 @@ def train(network: torch.nn.Module,
 
 def build_ood_eval(network: yolo.Network.NetWork, train_loader: DataLoader):
     print("开始构造ood求值")
-    build_residual_score(network, train_loader)
+    return build_residual_score(network, train_loader)
 
 
 def main(dataset_dir, checkpoint=None):
@@ -93,12 +93,21 @@ def main(dataset_dir, checkpoint=None):
                             collate_fn=H5DatasetYolo.collate_fn
                             )
 
-    # train(network, opt, dataloader, epoch, "weight", 1)
-    build_ood_eval(network, dataloader)
+    train(network, opt, dataloader, epoch, "weight", 1)
+    ood_evaluator = build_ood_eval(network, dataloader)
 
+    ood_evaluator_storage = [
+        {
+            "in_feature": e.in_feature_dim,
+            "ns_feature": e.ns_dim,
+            "weight": e.state_dict()
+        } if e is not None else None
+        for e in ood_evaluator
+    ]
     torch.save({
         "num_class": num_class,
         "network": network.state_dict(),
+        "ood_evaluator": ood_evaluator_storage,
         "epoch": epoch,
         "label_names": dataset.get_label_names()
     }, os.path.join("weight", f"yolo_final_full_20.pth"))
@@ -107,4 +116,4 @@ def main(dataset_dir, checkpoint=None):
 pass
 
 if __name__ == '__main__':
-    main("preprocess/pure_drone_train_full.h5", "weight/yolo_checkpoint_7.pth")
+    main("preprocess/pure_drone_train_1000.h5", "weight/yolo_checkpoint_9.pth")

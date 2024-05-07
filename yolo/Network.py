@@ -1,6 +1,8 @@
 import os
+import typing
 
 import torch
+import torchvision.ops
 from torch.nn import Module
 import einops
 
@@ -157,10 +159,15 @@ class BackBone(Module):
             C3(512, 512, 2, False)  # 23
         )
 
-    def forward(self, x):
+    def forward(self, x, extract_features: None | dict = None):
         x23 = self.inner(x)
         x17 = self.feature_storage["x17"]
         x20 = self.feature_storage["x20"]
+
+        if extract_features is not None:
+            # extract
+            extract_features.update(self.feature_storage)
+            extract_features["x23"] = x23
 
         self.feature_storage.clear()
         return x17, x20, x23
@@ -168,7 +175,6 @@ class BackBone(Module):
 
 class Detect(Module):
     # YOLOv5 Detect head for detection models
-    ood_evaluator: torch.nn.ModuleList
 
     def __init__(self, nc: int, anchors: list, ch: list):  # detection layer
         super().__init__()
@@ -178,13 +184,12 @@ class Detect(Module):
         self.na = len(anchors[0]) // 2  # number of anchors
         self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
         self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
+        self.origin_bbox = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
         self.register_buffer("anchors", torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
         self.m = torch.nn.ModuleList(
             torch.nn.Conv2d(x, self.no * self.na, 1)
             for x in ch
         )  # output conv
-        self.ood_evaluator = torch.nn.ModuleList(ResidualScore(x, x // 2) for x in ch)
-        self.output_odd_feature = False
 
         s = 256  # 2x min stride
         self.stride = torch.tensor([s / x for x in (32, 16, 8)])  # [8, 16, 32]
@@ -195,23 +200,15 @@ class Detect(Module):
         Processes input through YOLOv5 layers, altering shape for detection: `x(bs, 3, ny, nx, 85)`.
         网络输出的最后一维的格式为：[x坐标, y坐标, 宽度, 高度, 置信度, 每个类别的logit]
         """
-        ood_feature = []
-
         for i in range(self.nl):
-            if self.output_odd_feature:
-                ood_feature.append(einops.rearrange(x[i].detach(), "b c ny nx -> b ny nx c"))
-
             x[i] = self.m[i](x[i])  # 检测头，就是1x1卷积，输出an * (nc + 5)的特征图
             # 然后，将an（每层的anchor数）和nc + 5（一个物体的特征数）单独切分到两个维度里, x(bs,255,20,20) to x(bs,3,20,20,85)
             x[i] = einops.rearrange(x[i], "bs (na no) ny nx -> bs na ny nx no", na=self.na, no=self.no)
             x[i] = x[i].contiguous()
 
-        if self.output_odd_feature:
-            return x, ood_feature
-        else:
-            return x
+        return x
 
-    def inference_post_process(self, x, ood_feature: list[torch.Tensor] | None = None):
+    def inference_post_process(self, x):
         # 网络输出的x是基于anchor的偏移量，需要转换成基于整个图像的坐标
         z = []
         for i in range(self.nl):
@@ -221,7 +218,7 @@ class Detect(Module):
             # 对于不同大小的图片，检测头的输出的特征图大小是不一样的，所以需要根据特征图的大小来生成网格
             # 如果一样大就用缓存的
             if self.grid[i].shape[2:4] != x[i].shape[2:4]:
-                self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
+                self.grid[i], self.anchor_grid[i], self.origin_bbox[i] = self._make_grid(nx, ny, i)
 
             # grid是网格中心点，anchor_grid是网格的大小
             # 这个sigmoid会对输入的所有数进行sigmoid，因为恰好结果中的每一项每个数都需要sigmoid
@@ -238,13 +235,12 @@ class Detect(Module):
             # 这样通过一次乘法就可以直接得到bbox相对原图像的大小
             wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
 
-            if ood_feature:
-                assert self.ood_evaluator, "需要存在ood求值模块"
-                ood_score = self.ood_evaluator[i](ood_feature[i]).unsqueeze(1).expand(1, self.na, -1, -1).unsqueeze(-1)
-            else:
-                ood_score = torch.zeros_like(conf)
+            # 为了后续的OOD检测时从特征图中的正确的位置提取相关特征，添加每个输出的bbox的具体位置
+            origin_bbox = self.origin_bbox[i].expand(bs, -1, -1, -1, -1)
+            # 为了后续知道此检测结果来自哪个layer，添加一个layer编号
+            layer_id = torch.tensor(i, dtype=torch.float32, device=xy.device).expand(bs, self.na, ny, nx, 1)
 
-            y = torch.cat((xy, wh, conf, ood_score, logit), 4)
+            y = torch.cat((xy, wh, conf, origin_bbox, layer_id, logit), 4)
 
             # 将所有位置的所有锚框的结果都合并到一个维度
             y = y.view(bs, self.na * nx * ny, y.shape[-1])
@@ -258,17 +254,21 @@ class Detect(Module):
         :param nx: x方向的anchor数量
         :param ny: y方向的anchor数量
         :param i: 要生成的网络对应的anchor层
-        :return: grid是网格的中心点位置，anchor_grid是网格的大小
+        :return: grid是网格的中心点位置，anchor_grid是网格的大小，grid_bbox是网格归一化后的包围盒
         """
         d = self.anchors[i].device
         t = self.anchors[i].dtype
         shape = 1, self.na, ny, nx, 2  # grid shape
         y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
         yv, xv = torch.meshgrid(y, x, indexing="ij")
+        left_top = torch.stack((xv, yv), 2)
+
         # 生成的是锚框坐上角的坐标，加上0.5成中心点的坐标
-        grid = torch.stack((xv, yv), 2).expand(shape) + 0.5
+        grid = (left_top + 0.5).expand(shape)
+        bbox = torch.cat([left_top, left_top + 1], 2) / torch.tensor([nx, ny, nx, ny], device=d)
+        bbox = bbox.expand(1, self.na, ny, nx, 4)
         anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
-        return grid, anchor_grid
+        return grid, anchor_grid, bbox
 
 
 _ANCHORS = [
@@ -279,30 +279,46 @@ _ANCHORS = [
 
 
 class NetWork(Module):
-    feature_storage: dict
 
     def __init__(self, num_class: int):
         super(NetWork, self).__init__()
-        self.feature_storage = {}
         self.backbone = BackBone()
 
         self.detect = Detect(nc=num_class, anchors=_ANCHORS, ch=[128, 256, 512])
 
-    def forward(self, x):
-        x17, x20, x23 = self.backbone(x)
+    def forward(self, x, extract_features: None | dict = None):
+        x17, x20, x23 = self.backbone(x, extract_features)
 
         x = self.detect([x17, x20, x23])
 
         return x
 
 
-def load_network(weight_path: str) -> tuple[NetWork, list[str]]:
+def load_network(weight_path: str, load_ood_evaluator=False) \
+        -> tuple[NetWork, list[typing.Optional[ResidualScore]], typing.Optional[list[str]]]:
     state_dict: dict = torch.load(weight_path)
     num_class = state_dict["num_class"]
     network = NetWork(num_class)
     network.load_state_dict(state_dict["network"])
 
     print(f"成功从{os.path.abspath(weight_path)}加载模型权重")
+    ood_evaluators = []
+    if load_ood_evaluator:
+        try:
+            ood_evaluator_storage = state_dict["ood_evaluator"]
+            for s in ood_evaluator_storage:
+                if s is not None:
+                    in_feature = s["in_feature"]
+                    ns_feature = s["ns_feature"]
+                    evaluator = ResidualScore(in_feature, ns_feature)
+                    evaluator.load_state_dict(s["weight"])
+                    ood_evaluators.append(evaluator)
+                else:
+                    ood_evaluators.append(None)
+            print("成功加载OOD计算模块")
+        except ValueError:
+            raise RuntimeError("ood_evaluator信息不存在")
+
     if "label_names" in state_dict:
         label_names = state_dict["label_names"]
         print("获取标签名称：", label_names)
@@ -310,7 +326,7 @@ def load_network(weight_path: str) -> tuple[NetWork, list[str]]:
         print("获取标签失败，自动生成标签")
         label_names = list(str(i + 1) for i in range(num_class))
 
-    return network, label_names
+    return network, ood_evaluators, label_names
 
 
 if __name__ == '__main__':
