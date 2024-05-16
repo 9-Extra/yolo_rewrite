@@ -10,13 +10,12 @@ from preprocess import letterbox
 import cv2
 
 from yolo.non_max_suppression import non_max_suppression
-from yolo.ood_score import ResidualScore, peek_relative_feature, collect_features_single_infer
 from dataset import h5Dataset
 
 
-def display(img: numpy.ndarray, objs, label_names):
+def display(img: numpy.ndarray, objs, ood_scores, label_names):
     # objs: numpy.ndarray = objs.numpy(force=True)
-    for obj in objs:
+    for obj, ood_score in zip(objs, ood_scores):
         bbox, conf, origin_bbox, layer_id, cls = numpy.split(obj, [4, 5, 9, 10])
         x1, y1, x2, y2 = [int(p) for p in bbox]
         cls = int(cls.item())
@@ -26,23 +25,21 @@ def display(img: numpy.ndarray, objs, label_names):
         img = cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         img = cv2.putText(img, label_names[cls] + f"{conf:%}", (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2,
                           cv2.LINE_AA)
-        # img = cv2.putText(img, f"{ood_score}", (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2,
-        #                   cv2.LINE_AA)
+        img = cv2.putText(img, f"{ood_score.item():.3}", (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2,
+                           cv2.LINE_AA)
     cv2.imshow('image', img)
     cv2.waitKey(0)
 
 
 def detect(network: yolo.Network.NetWork,
-           ood_evaluators: list[typing.Optional[ResidualScore]],
+           ood_evaluators,
            images: list[str],
            label_names,
            device: torch.device
            ):
     with torch.no_grad():
         network.eval().to(device, non_blocking=True)
-        for o in ood_evaluators:
-            if o is not None:
-                o.to(device, non_blocking=True)
+        ood_evaluators.to(device, non_blocking=True)
 
         for img in images:
 
@@ -57,18 +54,11 @@ def detect(network: yolo.Network.NetWork,
 
             output = non_max_suppression(output)
 
-            record_features = collect_features_single_infer(extract_features, output, network.detect.nl)
-            scores = []
-            for f_dict, evaluator in zip(record_features, ood_evaluators):
-                if len(f_dict) != 0 and evaluator is not None:
-                    feature = torch.cat([f.flatten(1) for f in f_dict.values()], dim=-1)
-                    score = evaluator(feature)
-                    scores.append(score.item())
-                else:
-                    scores.append(0)
+            scores = ood_evaluators.score(extract_features, output)
 
-            if output[0].shape[0] != 0:
-                display(ori_img, output[0], scores, label_names)
+            for img, output, score in zip([ori_img], output, scores):
+                # if output.shape[0] != 0:
+                display(ori_img, output, score, label_names)
     pass
 
 

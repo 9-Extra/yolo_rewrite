@@ -3,201 +3,190 @@ import typing
 import torch
 import torchvision
 from torch.utils.data import DataLoader
-import tqdm
+from rich.progress import track, Progress, BarColumn, TaskProgressColumn, TextColumn, TimeRemainingColumn
 
 import yolo
 
 
-class ResidualScore(torch.nn.Module):
-    in_feature_dim: int
-    ns_dim: int
-    principal_space: torch.Tensor
-    u: torch.Tensor
+class MLP(torch.nn.Module):
+    in_dim: int
 
-    def __init__(self, in_feature_dim: int, ns_dim: int, device=None):
+    def __init__(self, in_dim):
         super().__init__()
-        self.in_feature_dim = in_feature_dim
-        self.ns_dim = ns_dim
-        self.register_buffer("principal_space", torch.empty([in_feature_dim, ns_dim], device=device))
-        self.register_buffer("u", torch.zeros([in_feature_dim], device=device))
+        self.in_dim = in_dim
+        self.inner = torch.nn.Sequential(
+            torch.nn.Linear(in_dim, 2048),
+            torch.nn.BatchNorm1d(2048),
+            torch.nn.ReLU(True),
 
-    def forward(self, feature: torch.Tensor):
-        with torch.no_grad():
-            score = -torch.norm(torch.matmul(feature - self.u, self.principal_space), dim=-1)
+            torch.nn.Linear(2048, 1024),
+            torch.nn.BatchNorm1d(1024),
+            torch.nn.ReLU(True),
 
-        return score
+            torch.nn.Linear(1024, 512),
+            torch.nn.BatchNorm1d(512),
+            torch.nn.ReLU(True),
 
+            torch.nn.Linear(512, 256),
+            torch.nn.BatchNorm1d(256),
+            torch.nn.ReLU(True),
 
-def peek_relative_feature_prediction(feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor], num_layer: int):
-    """
-    在提出prediction相关特征时保证关系不丢失
-    :param feature_dict:
-    :param prediction:
-    :param num_layer:
-    :return:
-    """
-    for name, feature in feature_dict.items():
-        b, c, h, w = feature.shape
-        device = feature.device
-        gain = torch.tensor([w, h, w, h], device=device)
+            torch.nn.Linear(256, 1),
+            torch.nn.Flatten(0),
+            torch.nn.Sigmoid()
+        )
 
-        anchor_bboxes = [[] for _ in range(num_layer)]
+    def forward(self, x):
+        return self.inner(x)
+
+    def score(self, feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
+        scores = []
+        self.eval()
+        for p in prediction:
+            if p.shape[0] == 0:
+                scores.append(torch.empty(0))
+                continue
+            feature = self.peek_relative_feature(feature_dict, [p])
+            score = self.forward(feature)
+
+            assert score.shape[0] == p.shape[0]
+
+            scores.append(score)
+
+        return scores
+
+    def to_static_dict(self):
+        return {
+            "in_dim": self.in_dim,
+            "weight": self.state_dict()
+        }
+
+    @staticmethod
+    def from_static_dict(mlp_dict: dict):
+        mlp = MLP(mlp_dict["in_dim"])
+        mlp.load_state_dict(mlp_dict["weight"])
+
+        return mlp
+
+    @staticmethod
+    def peek_relative_feature(feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
+        device = prediction[0].device
+        # 遍历每一个batch的输出
+        result = []
         for batch_id, batch_p in enumerate(prediction):
             if batch_p.shape[0] == 0:
+                # result.append(torch.empty(0, device=device))
                 continue
 
-            for i in range(num_layer):
-                p = batch_p[batch_p[..., 9] == i]  # 同layer产生的prediction
+            origin_bbox = batch_p[..., 5: 9]
 
-                if p.shape[0] == 0:
-                    continue
-
-                batch_bbox = torch.empty([p.shape[0], 5], dtype=torch.float32, device=device)
-                batch_bbox[..., 0] = batch_id
-
-                origin_bbox = p[..., 5: 9]
-                batch_bbox[..., 1:] = origin_bbox * gain
-                anchor_bboxes[i].append(batch_bbox)
-
-        result = []
-        for batch_bbox in anchor_bboxes:
-            if len(batch_bbox) != 0:
-                batch_bbox = torch.cat(batch_bbox, dim=0)
-                size = int((batch_bbox[0, 3] - batch_bbox[0, 1]).item())
-                if size > 0:
-                    relative_feature = torchvision.ops.roi_pool(feature, batch_bbox, size)
-                    result.append(relative_feature)
-                else:
-                    result.append(torch.empty(0))
-            else:
-                result.append(torch.empty(0))
-
-    return result
-
-
-def _peek_relative_feature(feature: torch.Tensor, prediction: list[torch.Tensor], num_layer: int):
-    b, c, h, w = feature.shape
-    device = feature.device
-    gain = torch.tensor([w, h, w, h], device=device)
-
-    anchor_bboxes = [[] for _ in range(num_layer)]
-    for batch_id, batch_p in enumerate(prediction):
-        if batch_p.shape[0] == 0:
-            continue
-
-        for i in range(num_layer):
-            p = batch_p[batch_p[..., 9] == i]  # 同layer产生的prediction
-
-            if p.shape[0] == 0:
-                continue
-
-            batch_bbox = torch.empty([p.shape[0], 5], dtype=torch.float32, device=device)
+            batch_bbox = torch.empty([batch_p.shape[0], 5], dtype=torch.float32, device=device)
             batch_bbox[..., 0] = batch_id
+            batch_bbox[..., 1:] = origin_bbox
 
-            origin_bbox = p[..., 5: 9]
-            batch_bbox[..., 1:] = origin_bbox * gain
-            anchor_bboxes[i].append(batch_bbox)
+            collected = []
 
-    result = []
-    for batch_bbox in anchor_bboxes:
-        if len(batch_bbox) != 0:
-            batch_bbox = torch.cat(batch_bbox, dim=0)
-            size = int((batch_bbox[0, 3] - batch_bbox[0, 1]).item())
-            if size > 0:
-                relative_feature = torchvision.ops.roi_pool(feature, batch_bbox, size)
-                result.append(relative_feature)
-            else:
-                result.append(torch.empty(0))
-        else:
-            result.append(torch.empty(0))
+            for name, feature in feature_dict.items():
+                b, c, h, w = feature.shape
 
-    return result
+                relative_feature = torchvision.ops.roi_pool(feature, batch_bbox, (2, 2), w)
+                collected.append(relative_feature.flatten(start_dim=1))  # 保留第0维
+
+            collected = torch.cat(collected, dim=1)  # 此时collected第0维为
+            assert collected.shape[0] == batch_p.shape[0]
+
+            result.append(collected)
+
+        return torch.cat(result) if len(result) != 0 else torch.empty(0, device=device, dtype=torch.float32)
 
 
-def collect_features_single_infer(extract_features: dict, prediction: list, num_layer: int):
-    record_features = [{} for _ in range(num_layer)]
-    for k, v in extract_features.items():
-        relative_feature = _peek_relative_feature(v, prediction, num_layer)
-        for layer_id, layer_feature in enumerate(relative_feature):
-            if layer_feature.shape[0] != 0:
-                record_features[layer_id][k] = layer_feature
-
-    return record_features
-
-
-def collect_features(network, train_loader: DataLoader):
+@torch.no_grad()
+def mlp_build_dataset(network, train_loader: DataLoader, epsilon=0.1):
     device = next(network.parameters()).device
-    num_layer = network.detect.nl
-    with torch.no_grad():
-        network.eval()
+    loss_func = yolo.loss.ComputeLoss(network)
 
-        record_features = [{} for _ in range(num_layer)]
-
-        for img, target in tqdm.tqdm(train_loader):
+    positive_features, negative_features = [], []
+    with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeRemainingColumn(),
+    ) as process:
+        for img, target in process.track(train_loader, description="收集特征"):
             img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
-            # target = torch.from_numpy(target).to(device, non_blocking=True)
+            target = torch.from_numpy(target).to(device, non_blocking=True)
+            img = img.requires_grad_()
 
             extract_features = {}
-            output = network(img, extract_features)
+            with torch.enable_grad():
+                output = network(img, extract_features)
+                loss = loss_func(output, target)
+
+            # FGSM产生对抗样本
+            grad = torch.autograd.grad(loss, img)[0]
+            attack_sample = (img + torch.sign(grad) * epsilon).clip(0, 1)
+
             output = network.detect.inference_post_process(output)
             prediction = yolo.non_max_suppression.non_max_suppression(output)
 
-            r = collect_features_single_infer(extract_features, prediction, num_layer)
+            positive_features.append(MLP.peek_relative_feature(extract_features, prediction))
 
-            for i in range(num_layer):
-                for k, v in r[i].items():
-                    record_features[i].setdefault(k, []).append(v)
+            extract_features = {}
+            _ = network(attack_sample, extract_features)
+            negative_features.append(MLP.peek_relative_feature(extract_features, prediction))
 
-        for f_dict in record_features:
-            for k in f_dict.keys():
-                f_dict[k] = torch.cat(f_dict[k], dim=0)
+    # 构造MLP训练集
+    positive_features = torch.cat(positive_features)
+    negative_features = torch.cat(negative_features)
+    y = torch.zeros(positive_features.shape[0] + negative_features.shape[0], dtype=torch.float32, device=device)
+    y[:positive_features.shape[0]] = 1  # 正样本值为1
+    x = torch.cat([positive_features, negative_features])
 
-    return record_features
+    assert x.shape[0] == y.shape[0]
+
+    return x, y
 
 
-def build_residual_score(network, train_loader: DataLoader, assume_center=True) -> list[typing.Optional[ResidualScore]]:
+def build_mlp_classifier(network, train_loader: DataLoader, epsilon=0.05, epoch=30):
     device = next(network.parameters()).device
-    num_layer = network.detect.nl
-    with torch.no_grad():
-        record_features = collect_features(network, train_loader)
+    x, y = mlp_build_dataset(network, train_loader, epsilon)
+    print("训练样本数：", x.shape[0])
+    print("特征长度：", x.shape[1])
+    dataset = torch.utils.data.TensorDataset(x, y)
 
-        flatten_features = []
-        for f_dict in record_features:
-            if len(f_dict) != 0:
-                feature = torch.cat([f.flatten(1) for f in f_dict.values()], dim=-1)
-                print(f"样本数{feature.shape[0]}")
-                flatten_features.append(feature)
-            else:
-                flatten_features.append(None)
-                print("有的layer一个正样本也没有，无法生成判别器")
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [0.8, 0.2])
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
+    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=64)
 
-        residuals = []
-        for f in flatten_features:
-            if f is None:
-                residuals.append(None)
-                continue
+    mlp = MLP(x.shape[1])
+    mlp = mlp.to(device).train()
+    opt = torch.optim.Adam(mlp.parameters())
+    loss_func = torch.nn.BCELoss()
 
-            input_dim = f.shape[1]
-            if input_dim >= 1024:
-                ns_dim = 512
-            else:
-                ns_dim = input_dim // 2
-            evaluator = ResidualScore(input_dim, ns_dim, device=device)
+    with Progress() as progress:
+        train_task = progress.add_task("train")
+        epoch_task = progress.add_task("epoch")
+        for e in progress.track(range(epoch), task_id=train_task, description="训练MLP"):
+            network.train()
+            for x, y in progress.track(train_dataloader, task_id=epoch_task, description="epoch"):
+                opt.zero_grad()
+                output = mlp.forward(x)
+                loss = loss_func(output, y)
+                loss.backward()
+                opt.step()
 
-            feature_dim = evaluator.ns_dim
-            print(f'{feature_dim=}')
+            network.eval()
+            val_acc = torch.tensor(0, device=device)
+            with torch.no_grad():
+                for x, y in val_dataloader:
+                    output = mlp.forward(x)
+                    p = torch.zeros_like(output)
+                    p[output > 0.5] = 1
+                    val_acc += torch.count_nonzero(p == y)
 
-            if not assume_center:
-                evaluator.u = torch.mean(f, list(range(0, len(f.shape) - 1)))
+            val_acc = val_acc.item() / len(val_dataset)
 
-            # computing principal space
-            x = f - evaluator.u
-            covariance = x.T @ x / x.shape[0]  # 求协方差矩阵
-            eig_vals, eigen_vectors = torch.linalg.eig(covariance)
-            _, idx = torch.topk(eig_vals.real, feature_dim)
-            principal_space = eigen_vectors.real[idx].T.contiguous()
-            evaluator.principal_space = principal_space
+            print(f"epoch {e}: acc = {val_acc:%}")
 
-            residuals.append(evaluator)
-
-        return residuals
+    return mlp

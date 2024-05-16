@@ -6,7 +6,7 @@ import torchvision.ops
 from torch.nn import Module
 import einops
 
-from yolo.ood_score import ResidualScore
+from yolo.ood_score import MLP
 
 
 class FeatureExporter(Module):
@@ -295,26 +295,17 @@ class NetWork(Module):
 
 
 def load_network(weight_path: str, load_ood_evaluator=False) \
-        -> tuple[NetWork, list[typing.Optional[ResidualScore]], typing.Optional[list[str]]]:
+        -> tuple[NetWork, typing.Any, typing.Optional[list[str]]]:
     state_dict: dict = torch.load(weight_path)
     num_class = state_dict["num_class"]
     network = NetWork(num_class)
     network.load_state_dict(state_dict["network"])
 
     print(f"成功从{os.path.abspath(weight_path)}加载模型权重")
-    ood_evaluators = []
+    ood_evaluator = None
     if load_ood_evaluator:
         try:
-            ood_evaluator_storage = state_dict["ood_evaluator"]
-            for s in ood_evaluator_storage:
-                if s is not None:
-                    in_feature = s["in_feature"]
-                    ns_feature = s["ns_feature"]
-                    evaluator = ResidualScore(in_feature, ns_feature)
-                    evaluator.load_state_dict(s["weight"])
-                    ood_evaluators.append(evaluator)
-                else:
-                    ood_evaluators.append(None)
+            ood_evaluator = MLP.from_static_dict(state_dict["ood_evaluator"])
             print("成功加载OOD计算模块")
         except ValueError:
             raise RuntimeError("ood_evaluator信息不存在")
@@ -326,7 +317,19 @@ def load_network(weight_path: str, load_ood_evaluator=False) \
         print("获取标签失败，自动生成标签")
         label_names = list(str(i + 1) for i in range(num_class))
 
-    return network, ood_evaluators, label_names
+    return network, ood_evaluator, label_names
+
+
+def load_checkpoint(weight_path: str) -> tuple[NetWork, torch.optim.Optimizer]:
+    state_dict = torch.load(weight_path)
+    num_class = state_dict["num_class"]
+    # start_epoch = state_dict["epoch"]
+    network = NetWork(num_class)
+    network.load_state_dict(state_dict["network"])
+    opt = torch.optim.Adam(network.parameters())
+    opt.load_state_dict(state_dict["optimizer"])
+
+    return network, opt
 
 
 if __name__ == '__main__':
