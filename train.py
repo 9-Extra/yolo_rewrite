@@ -30,9 +30,12 @@ def train(network: torch.nn.Module,
             TaskProgressColumn(),
             TextColumn("{task.completed}/{task.total}"),
             TimeRemainingColumn(),
-    ) as process:
-        for epoch in process.track(range(epochs), epochs, description=f"epoch"):
-            for i, (img, target) in enumerate(process.track(train_loader, len(train_loader), description=f"Train")):
+    ) as progress:
+        train_task = progress.add_task("train")
+        epoch_task = progress.add_task("epoch")
+
+        for epoch in progress.track(range(epochs), epochs, train_task, description=f"epoch"):
+            for i, (img, target) in enumerate(progress.track(train_loader, len(train_loader), epoch_task, description=f"train")):
                 # ori =cv2.cvtColor(img[0].transpose(1, 2, 0), cv2.COLOR_RGB2BGR)
                 # cv2.imshow("show", ori)
                 # cv2.waitKey(0)
@@ -55,32 +58,33 @@ def train(network: torch.nn.Module,
                 }, os.path.join(save_path, f"yolo_checkpoint_{epoch}.pth"))
                 print(f"Loss: {loss.item()}")
 
+            progress.reset(epoch_task)
+
     # torch.save(network.state_dict(), os.path.join(save_path, f"yolo_original.pth"))
 
 
 def build_ood_eval(network: yolo.Network.Yolo, train_loader: DataLoader):
     print("开始构造ood求值")
-    return build_mlp_classifier(network, train_loader, ExtractConcat(), epsilon=0.05)
+    return build_mlp_classifier(network, train_loader, ExtractConcat(), epsilon=0.05    )
 
 
 def main(dataset_dir, checkpoint=None):
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
-    epoch = 0
+    epoch = 1
 
     dataset = H5DatasetYolo(dataset_dir)
 
     if checkpoint:
-        network, opt = utils.load_checkpoint(checkpoint)
+        network, opt = utils.load_checkpoint(checkpoint, device)
         num_class = network.detect.nc
         print(f"从模型{os.path.abspath(checkpoint)}开始")
     else:
         num_class = len(dataset.get_label_names())
         network = yolo.Network.Yolo(num_class)
+        network.to(device, non_blocking=True)
         opt = torch.optim.Adam(network.parameters())
-
-    network.train().to(device, non_blocking=True)
 
     dataloader = DataLoader(dataset,
                             batch_size=8,

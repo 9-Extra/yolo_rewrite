@@ -33,11 +33,12 @@ def load_network(weight_path: str, load_ood_evaluator=False) \
     return network, ood_evaluator, label_names
 
 
-def load_checkpoint(weight_path: str) -> tuple[Yolo, torch.optim.Optimizer]:
-    state_dict = torch.load(weight_path)
+def load_checkpoint(weight_path: str, device: torch.device) -> tuple[Yolo, torch.optim.Optimizer]:
+    state_dict = torch.load(weight_path, map_location=device)
     num_class = state_dict["num_class"]
     # start_epoch = state_dict["epoch"]
     network = Yolo(num_class)
+    network.to(device)
     network.load_state_dict(state_dict["network"])
     opt = torch.optim.Adam(network.parameters())
     opt.load_state_dict(state_dict["optimizer"])
