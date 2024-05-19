@@ -1,18 +1,18 @@
-import typing
-
 import torch
 import torchvision
 from torch.utils.data import DataLoader
-from rich.progress import track, Progress, BarColumn, TaskProgressColumn, TextColumn, TimeRemainingColumn
+from rich.progress import Progress, BarColumn, TaskProgressColumn, TextColumn, TimeRemainingColumn
 
 import yolo
+from .ood_evaluator import OODEvaluator
+from .FeatureExtract import FeatureExtract
 
 
-class MLP(torch.nn.Module):
+class MLP(OODEvaluator):
     in_dim: int
 
-    def __init__(self, in_dim):
-        super().__init__()
+    def __init__(self, in_dim, feature_extractor: FeatureExtract):
+        super().__init__(feature_extractor)
         self.in_dim = in_dim
         self.inner = torch.nn.Sequential(
             torch.nn.Linear(in_dim, 2048),
@@ -40,30 +40,32 @@ class MLP(torch.nn.Module):
         return self.inner(x)
 
     def score(self, feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
-        scores = []
+        score_list = []
         self.eval()
         for p in prediction:
             if p.shape[0] == 0:
-                scores.append(torch.empty(0))
+                score_list.append(torch.empty(0))
                 continue
             feature = self.peek_relative_feature(feature_dict, [p])
             score = self.forward(feature)
 
             assert score.shape[0] == p.shape[0]
 
-            scores.append(score)
+            score_list.append(score)
 
-        return scores
+        return score_list
 
     def to_static_dict(self):
+        feature_extractor_copy = self.feature_extractor.__class__()  # save a new one
         return {
             "in_dim": self.in_dim,
+            "feature_extractor": feature_extractor_copy,
             "weight": self.state_dict()
         }
 
     @staticmethod
     def from_static_dict(mlp_dict: dict):
-        mlp = MLP(mlp_dict["in_dim"])
+        mlp = MLP(mlp_dict["in_dim"], mlp_dict["feature_extractor"])
         mlp.load_state_dict(mlp_dict["weight"])
 
         return mlp
@@ -78,7 +80,7 @@ class MLP(torch.nn.Module):
                 # result.append(torch.empty(0, device=device))
                 continue
 
-            origin_bbox = batch_p[..., 5: 9]
+            origin_bbox = batch_p[..., 0: 4]
 
             batch_bbox = torch.empty([batch_p.shape[0], 5], dtype=torch.float32, device=device)
             batch_bbox[..., 0] = batch_id
@@ -89,7 +91,7 @@ class MLP(torch.nn.Module):
             for name, feature in feature_dict.items():
                 b, c, h, w = feature.shape
 
-                relative_feature = torchvision.ops.roi_pool(feature, batch_bbox, (2, 2), w)
+                relative_feature = torchvision.ops.roi_align(feature, batch_bbox, (2, 2))
                 collected.append(relative_feature.flatten(start_dim=1))  # 保留第0维
 
             collected = torch.cat(collected, dim=1)  # 此时collected第0维为
@@ -101,9 +103,12 @@ class MLP(torch.nn.Module):
 
 
 @torch.no_grad()
-def mlp_build_dataset(network, train_loader: DataLoader, epsilon=0.1):
+def mlp_build_dataset(network, feature_extractor: FeatureExtract, train_loader: DataLoader, epsilon: float):
     device = next(network.parameters()).device
     loss_func = yolo.loss.ComputeLoss(network)
+
+    network.eval()
+    feature_extractor.attach(network)
 
     positive_features, negative_features = [], []
     with Progress(
@@ -113,14 +118,14 @@ def mlp_build_dataset(network, train_loader: DataLoader, epsilon=0.1):
             TextColumn("{task.completed}/{task.total}"),
             TimeRemainingColumn(),
     ) as process:
-        for img, target in process.track(train_loader, description="收集特征"):
+        for img, target in process.track(train_loader, len(train_loader), description="收集特征"):
             img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
             target = torch.from_numpy(target).to(device, non_blocking=True)
             img = img.requires_grad_()
 
-            extract_features = {}
             with torch.enable_grad():
-                output = network(img, extract_features)
+                feature_extractor.ready()
+                output = network(img)
                 loss = loss_func(output, target)
 
             # FGSM产生对抗样本
@@ -130,11 +135,12 @@ def mlp_build_dataset(network, train_loader: DataLoader, epsilon=0.1):
             output = network.detect.inference_post_process(output)
             prediction = yolo.non_max_suppression.non_max_suppression(output)
 
-            positive_features.append(MLP.peek_relative_feature(extract_features, prediction))
+            positive_features.append(MLP.peek_relative_feature(feature_extractor.get_features(), prediction))
+            feature_extractor.ready()
+            _ = network(attack_sample)
+            negative_features.append(MLP.peek_relative_feature(feature_extractor.get_features(), prediction))
 
-            extract_features = {}
-            _ = network(attack_sample, extract_features)
-            negative_features.append(MLP.peek_relative_feature(extract_features, prediction))
+    feature_extractor.detach()
 
     # 构造MLP训练集
     positive_features = torch.cat(positive_features)
@@ -148,18 +154,21 @@ def mlp_build_dataset(network, train_loader: DataLoader, epsilon=0.1):
     return x, y
 
 
-def build_mlp_classifier(network, train_loader: DataLoader, epsilon=0.05, epoch=30):
+def build_mlp_classifier(network, train_loader: DataLoader, feature_extractor: FeatureExtract, epsilon: float,
+                         epoch=30):
     device = next(network.parameters()).device
-    x, y = mlp_build_dataset(network, train_loader, epsilon)
+    x, y = mlp_build_dataset(network, feature_extractor, train_loader, epsilon)
+    feature_dim = x.shape[1]
     print("训练样本数：", x.shape[0])
-    print("特征长度：", x.shape[1])
+    print("特征长度：", feature_dim)
     dataset = torch.utils.data.TensorDataset(x, y)
 
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [0.8, 0.2])
+    del x, y, dataset
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
     val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=64)
 
-    mlp = MLP(x.shape[1])
+    mlp = MLP(feature_dim, feature_extractor)
     mlp = mlp.to(device).train()
     opt = torch.optim.Adam(mlp.parameters())
     loss_func = torch.nn.BCELoss()
@@ -168,8 +177,12 @@ def build_mlp_classifier(network, train_loader: DataLoader, epsilon=0.05, epoch=
         train_task = progress.add_task("train")
         epoch_task = progress.add_task("epoch")
         for e in progress.track(range(epoch), task_id=train_task, description="训练MLP"):
+
             network.train()
-            for x, y in progress.track(train_dataloader, task_id=epoch_task, description="epoch"):
+            progress.reset(epoch_task)
+
+            for x, y in progress.track(train_dataloader, len(train_dataloader), task_id=epoch_task,
+                                       description="epoch"):
                 opt.zero_grad()
                 output = mlp.forward(x)
                 loss = loss_func(output, y)

@@ -2,11 +2,8 @@ import os
 import typing
 
 import torch
-import torchvision.ops
 from torch.nn import Module
 import einops
-
-from yolo.ood_score import MLP
 
 
 class FeatureExporter(Module):
@@ -159,15 +156,44 @@ class BackBone(Module):
             C3(512, 512, 2, False)  # 23
         )
 
-    def forward(self, x, extract_features: None | dict = None):
+        # self.inner = torch.nn.Sequential(OrderedDict({
+        #     "conv1": Conv(3, 32, 6, 2, 2),
+        #     "conv2": Conv(32, 64, 3, 2),
+        #     "C3_1": C3(64, 64, 2),
+        #     "conv3": Conv(64, 128, 3, 2),
+        #     "exp_b4": FeatureExporter(self.feature_storage, "b4"),
+        #     "C3_2": C3(128, 128, 4),
+        #     "conv4": Conv(128, 256, 3, 2),
+        #     "exp_b6": FeatureExporter(self.feature_storage, "b6"),
+        #     "C3_3": C3(256, 256, 6),
+        #     "conv5": Conv(256, 512, 3, 2),
+        #     "C3_4": C3(512, 512, 2),
+        #     "SPP": SPPF(512, 512, 5),
+        #     # head
+        #     "conv6": Conv(512, 256, 1, 1),  # 10
+        #     "exp_x10": FeatureExporter(self.feature_storage, "x10"),
+        #     "upsample1": torch.nn.Upsample(None, 2, "nearest"),  # 11
+        #     "cat_b6": FeatureConcat(self.feature_storage, "b6"),  # 12
+        #     "C3_5": C3(256 + 256, 256, 2, False),  # 13
+        #     "conv7": Conv(256, 128, 1, 1),  # 14
+        #     "exp_x14": FeatureExporter(self.feature_storage, "x14"),
+        #     "upsample2": torch.nn.Upsample(None, 2, "nearest"),  # 15
+        #     "cat_b4": FeatureConcat(self.feature_storage, "b4"),  # 16
+        #     "C3_6": C3(128 + 128, 128, 2, False),  # 17
+        #     "exp_x17": FeatureExporter(self.feature_storage, "x17"),
+        #     "conv8": Conv(128, 128, 3, 2),  # 18
+        #     "cat_x14": FeatureConcat(self.feature_storage, "x14"),  # 19
+        #     "C3_7": C3(256, 256, 2, False),  # 20
+        #     "exp_x20": FeatureExporter(self.feature_storage, "x20"),
+        #     "conv9": Conv(256, 256, 3, 2),  # 21
+        #     "cat_x10": FeatureConcat(self.feature_storage, "x10"),  # 22
+        #     "C3_8": C3(512, 512, 2, False)  # 23
+        # }))
+
+    def forward(self, x):
         x23 = self.inner(x)
         x17 = self.feature_storage["x17"]
         x20 = self.feature_storage["x20"]
-
-        if extract_features is not None:
-            # extract
-            extract_features.update(self.feature_storage)
-            extract_features["x23"] = x23
 
         self.feature_storage.clear()
         return x17, x20, x23
@@ -278,61 +304,23 @@ _ANCHORS = [
 ]
 
 
-class NetWork(Module):
+class Yolo(Module):
 
     def __init__(self, num_class: int):
-        super(NetWork, self).__init__()
+        super(Yolo, self).__init__()
         self.backbone = BackBone()
 
         self.detect = Detect(nc=num_class, anchors=_ANCHORS, ch=[128, 256, 512])
 
-    def forward(self, x, extract_features: None | dict = None):
-        x17, x20, x23 = self.backbone(x, extract_features)
+    def forward(self, x):
+        x17, x20, x23 = self.backbone(x)
 
         x = self.detect([x17, x20, x23])
 
         return x
 
 
-def load_network(weight_path: str, load_ood_evaluator=False) \
-        -> tuple[NetWork, typing.Any, typing.Optional[list[str]]]:
-    state_dict: dict = torch.load(weight_path)
-    num_class = state_dict["num_class"]
-    network = NetWork(num_class)
-    network.load_state_dict(state_dict["network"])
-
-    print(f"成功从{os.path.abspath(weight_path)}加载模型权重")
-    ood_evaluator = None
-    if load_ood_evaluator:
-        try:
-            ood_evaluator = MLP.from_static_dict(state_dict["ood_evaluator"])
-            print("成功加载OOD计算模块")
-        except ValueError:
-            raise RuntimeError("ood_evaluator信息不存在")
-
-    if "label_names" in state_dict:
-        label_names = state_dict["label_names"]
-        print("获取标签名称：", label_names)
-    else:
-        print("获取标签失败，自动生成标签")
-        label_names = list(str(i + 1) for i in range(num_class))
-
-    return network, ood_evaluator, label_names
-
-
-def load_checkpoint(weight_path: str) -> tuple[NetWork, torch.optim.Optimizer]:
-    state_dict = torch.load(weight_path)
-    num_class = state_dict["num_class"]
-    # start_epoch = state_dict["epoch"]
-    network = NetWork(num_class)
-    network.load_state_dict(state_dict["network"])
-    opt = torch.optim.Adam(network.parameters())
-    opt.load_state_dict(state_dict["optimizer"])
-
-    return network, opt
-
-
 if __name__ == '__main__':
-    network = NetWork(1)
+    network = Yolo(1)
     network(torch.rand((1, 3, 256, 256)))
     print(network)

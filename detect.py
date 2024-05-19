@@ -1,8 +1,8 @@
 import os
-import typing
 
 import numpy
 
+import utils
 import yolo
 import torch
 
@@ -10,7 +10,7 @@ from preprocess import letterbox
 import cv2
 
 from yolo.non_max_suppression import non_max_suppression
-from dataset import h5Dataset
+from safe import ood_evaluator
 
 
 def display(img: numpy.ndarray, objs, ood_scores, label_names):
@@ -31,41 +31,42 @@ def display(img: numpy.ndarray, objs, ood_scores, label_names):
     cv2.waitKey(0)
 
 
-def detect(network: yolo.Network.NetWork,
-           ood_evaluators,
+@torch.no_grad()
+def detect(network: yolo.Network.Yolo,
+           ood_evaluators: ood_evaluator.OODEvaluator,
            images: list[str],
            label_names,
            device: torch.device
            ):
-    with torch.no_grad():
-        network.eval().to(device, non_blocking=True)
-        ood_evaluators.to(device, non_blocking=True)
+    extractor = ood_evaluators.feature_extractor
+    extractor.attach(network)
+    network.eval().to(device, non_blocking=True)
+    ood_evaluators.to(device, non_blocking=True)
 
-        for img in images:
+    for img in images:
 
-            ori_img = letterbox(cv2.imread(img), (640, 640))[0]
-            img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2HSV_FULL).transpose(2, 0, 1)[numpy.newaxis, ...]
-            img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
+        ori_img = letterbox(cv2.imread(img), (640, 640))[0]
+        img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2HSV_FULL).transpose(2, 0, 1)[numpy.newaxis, ...]
+        img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
 
-            extract_features = {}
-            output = network(img, extract_features)
-            output = network.detect.inference_post_process(output)
-            # print(extract_features.keys())
+        extractor.ready()
+        output = network(img)
+        output = network.detect.inference_post_process(output)
 
-            output = non_max_suppression(output)
+        output = non_max_suppression(output)
 
-            scores = ood_evaluators.score(extract_features, output)
+        scores = ood_evaluators.score(extractor.get_features(), output)
 
-            for img, output, score in zip([ori_img], output, scores):
-                # if output.shape[0] != 0:
-                display(ori_img, output, score, label_names)
+        for img, output, score in zip([ori_img], output, scores):
+            # if output.shape[0] != 0:
+            display(ori_img, output, score, label_names)
     pass
 
 
 def main(weight_path, img_dir):
     device = torch.device("cuda")
 
-    network, ood_evaluators, label_names = yolo.Network.load_network(weight_path, load_ood_evaluator=True)
+    network, ood_evaluators, label_names = utils.load_network(weight_path, load_ood_evaluator=True)
 
     network.eval().to(device, non_blocking=True)
 

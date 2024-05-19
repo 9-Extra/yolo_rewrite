@@ -1,15 +1,19 @@
+import pickle
+
 import cv2
 import numpy
-import sklearn
 
+import utils
 import yolo
 import torch
 from torch.utils.data import DataLoader
 from dataset.h5Dataset import H5DatasetYolo
 from rich.progress import track
 from sklearn import metrics
+from matplotlib import pyplot
 
 from yolo.non_max_suppression import non_max_suppression
+from safe.ood_evaluator import OODEvaluator
 
 
 def box_iou(box1, box2):
@@ -100,7 +104,7 @@ def ap_per_class(stat, eps=1e-16):
     tp, conf, ood_score, pred_cls, target_cls = stat
     # 从大到小排序
     i = numpy.argsort(-conf)
-    tp, conf, ood_score, pred_cls = tp[i], ood_score[i], conf[i], pred_cls[i]
+    tp, conf, ood_score, pred_cls = tp[i], conf[i], ood_score[i], pred_cls[i]
 
     # Find unique classes
     unique_classes, nt = numpy.unique(target_cls, return_counts=True)
@@ -109,7 +113,7 @@ def ap_per_class(stat, eps=1e-16):
     # Create Precision-Recall curve and compute AP for each class
     px, py = numpy.linspace(0, 1, 1000), []  # for plotting
     ap, p, r = numpy.zeros((nc, tp.shape[1])), numpy.zeros((nc, 1000)), numpy.zeros((nc, 1000))
-    auroc = numpy.zeros(nc)
+    # auroc = numpy.zeros(nc)
     fpr95 = numpy.zeros(nc)
     for ci, c in enumerate(unique_classes):
         i: numpy.ndarray = pred_cls == c  # type: ignore  # 所有当前类型的预测结果
@@ -136,10 +140,32 @@ def ap_per_class(stat, eps=1e-16):
         for j in range(tp.shape[1]):
             ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
 
-        fpr = fpc[:, 0] / n_p
-        tpr = tpc[:, 0] / n_p
-        auroc[ci] = metrics.auc(fpr, tpr)
+        # fpr = numpy.concatenate(fpc[:, 0] / n_p)
+        # tpr = tpc[:, 0] / n_p
+        #
+        # pyplot.figure("ROC")
+        # pyplot.plot(fpr, tpr)
+        # pyplot.show()
+
+        # auroc[ci] = metrics.auc(fpr, tpr)
         # fpr95[ci] = fpr[numpy.where(tpr > 0.95)] 计算上还有问题
+
+    # 统计OOD检测结果
+    print("总样本数：", len(conf))
+    detect_mask = conf != 0
+    print("真正检测结果数：", numpy.count_nonzero(detect_mask))
+    # detect_conf = conf[detect_mask]
+    detect_ood = ood_score[detect_mask]
+    detect_gt = tp[detect_mask, 0]  # 真正的目标
+    print("检测结果中真正目标数：", numpy.count_nonzero(detect_gt))
+    # TP数
+    fpr, tpr, _ = metrics.roc_curve(detect_gt, detect_ood)
+    # print(f"{fpr=}\n{tpr=}\n{threshold=}")
+    pyplot.figure("ROC")
+    pyplot.plot(fpr, tpr)
+    pyplot.show()
+    auroc = metrics.auc(fpr, tpr)
+    fpr95 = fpr[numpy.where(tpr > 0.95)[0][0]]
 
 
     # Compute F1 (harmonic mean of precision and recall)
@@ -154,6 +180,7 @@ def ap_per_class(stat, eps=1e-16):
 
 def process_batch(detections, labels, iouv):
     """
+    为每一个检测结果尝试匹配一个正确的标签
     Return correct prediction matrix.
 
     Arguments:
@@ -165,23 +192,38 @@ def process_batch(detections, labels, iouv):
     correct = numpy.zeros((detections.shape[0], iouv.shape[0]), dtype=bool)
     # torchvision.ops.box_iou()
     iou = box_iou(labels[:, 1:], detections[:, :4])
-    correct_class = labels[:, 0:1] == detections[:, 10]
+    correct_class = labels[:, 0:1] == detections[:, 10]  # 类型是否匹配
+    # iou和correct_class都表示了每个检测结果和每个正确结果的配对
     for i in range(len(iouv)):
-        x = numpy.where((iou >= iouv[i]) & correct_class)  # IoU > threshold and classes match
-        if x[0].shape[0]:
+        # 计算当前iou阈值下正确配对的下标，包含多个正确的配对
+        x = numpy.where((iou >= iouv[i]) & correct_class)
+        if x[0].shape[0] != 0:  # 如果存在正确配对
+            # matches包含配对信息和此配对的iou
             matches = numpy.concatenate((numpy.stack(x, 1), iou[x[0], x[1]][:, None]), 1)  # [label, detect, iou]
-            if x[0].shape[0] > 1:
+            if x[0].shape[0] > 1:  # 如果配对总数多于一个，需要过滤掉多对一或一对多的情况
+                # 将所有配对以iou从高到低排序
                 matches = matches[matches[:, 2].argsort()[::-1]]
+                # 对于每个检测结果，如果对应了多个真实包围盒，只保留iou最高的一个
                 matches = matches[numpy.unique(matches[:, 1], return_index=True)[1]]
+                # 反之，对于每个包围盒，如果对应了多个检测结果，只保留iou最高的一个
                 matches = matches[numpy.unique(matches[:, 0], return_index=True)[1]]
+            # 将正确匹配结果对应的correct设置为True
             correct[matches[:, 1].astype(int), i] = True
+
+    # correct中的每一行为一个检测结果
+    # 如果其中存在True说明匹配上了，是TP
+    # 如果全为False说明是FP，误识别
+    # 没有检测到的正确结果实际上漏掉了没有统计
+
     return correct
 
 
-def val(network: torch.nn.Module, ood_evaluators, train_loader: DataLoader):
+def val(network: torch.nn.Module, ood_evaluators: OODEvaluator, train_loader: DataLoader):
     device = next(network.parameters()).device
 
     network.eval()
+    feature_extractor = ood_evaluators.feature_extractor
+    feature_extractor.attach(network)
 
     iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
     niou = iouv.size
@@ -201,11 +243,11 @@ def val(network: torch.nn.Module, ood_evaluators, train_loader: DataLoader):
                                                                         dtype=numpy.float32)
         # target = torch.from_numpy(target).to(device)
 
-        extract_features = {}
-        output = network(img, extract_features)
+        feature_extractor.ready()
+        output = network(img)
         output = network.detect.inference_post_process(output)
         output = non_max_suppression(output)
-        ood_scores = ood_evaluators.score(extract_features, output)
+        ood_scores = ood_evaluators.score(feature_extractor.get_features(), output)
 
         for i, (pred, ood_score) in enumerate(zip(output, ood_scores)):
             pred = pred.numpy(force=True)
@@ -214,49 +256,36 @@ def val(network: torch.nn.Module, ood_evaluators, train_loader: DataLoader):
             # 取得对应batch的正确label
             labels = target[target[:, 0] == i, 1:]
 
-            # TP：正确检测结果
-            # FP：目标没有被检测到或者类型错误
-            # FN：没有目标的地方打上了框
-            # Precision：所有真正的目标中被正确识别的概率 (TP / 目标总数)
-            # Recall：检测结果正确的概率 (TP / 检测结果数)
-
-            # 检测步骤为先将预测出的包围盒与GT包围盒进行匹配
-            # 对每个预测结果匹配IOU最大的包围盒，只要IOU超过阈值且类型一致就算是TP，如果类型不一致为记为FP
-            # 如果预测结果没有匹配上GT，记为FN
-            # 如果有GT没有匹配预测结果，记为FP
-
-            # 检测步骤为先将预测出的包围盒与GT包围盒进行匹配
-            # 记录目标数和检测结果数
-            # 对每个预测结果匹配IOU最大的包围盒，只要IOU超过阈值且类型一致就可能是TP
-            # 如果预测结果没有匹配上GT，记为FN，为误识别，记录其OOD score
-            # 对每个可能是TP的结构，记录其置信度值，OOD score
-
-            # 对于一个只有负样本的数据集，如何检验神经网络的效能
+            # 检测结果实际上分三类：正确匹配的正样本，没有被匹配的正样本，误识别的负样本
+            # 在进行OOD检测时需要区分这三种样本
 
             nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
 
             if npr == 0:
                 # 没有预测任何东西
                 if nl != 0:  # 但是实际上有东西
-                    correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
-                    stats.append((correct, *numpy.zeros([3, npr]), labels[:, 0]))
+                    correct = numpy.zeros([nl, niou], dtype=bool)  # 全错
+                    # 没有被匹配的正样本
+                    stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
             else:
                 # 预测出了东西
                 if nl != 0:  # 实际上也有东西，这个时候才需要进行判断
+                    # 可能产生三种样本
                     correct = process_batch(pred, labels, iouv)
                 else:
+                    # 误识别的负样本
                     correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
                 conf = pred[:, 4]
-                # ood_score = pred[:, 5]
                 cls = pred[:, 10]
                 stats.append((correct, conf, ood_score, cls, labels[:, 0]))  # (correct, conf, pcls, tcls)
         pass
 
     stats = [numpy.concatenate(x, 0) for x in zip(*stats)]  # to numpy
+
     if len(stats) and stats[0].any():
         tp, fp, p, r, f1, ap, ood_score, auroc, fpr95 = ap_per_class(stats)
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        mp, mr, map50, map, auroc = p.mean(), r.mean(), ap50.mean(), ap.mean(), auroc.mean()
+        mp, mr, map50, map, auroc = p.mean(), r.mean(), ap50.mean(), ap.mean(), auroc
     else:
         mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0
         auroc = 0.0
@@ -273,7 +302,7 @@ def main(weight_path: str, data_path: str):
 
     print(f"正在验证网络{weight_path}， 使用数据集{data_path}")
 
-    network, ood_evaluators, label_names = yolo.Network.load_network(weight_path, load_ood_evaluator=True)
+    network, ood_evaluators, label_names = utils.load_network(weight_path, load_ood_evaluator=True)
     ood_evaluators.to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
 
@@ -288,6 +317,22 @@ def main(weight_path: str, data_path: str):
     pass
 
 
+def summary():
+    stats = pickle.load(open("stats.npy", "br"))
+    if len(stats) and stats[0].any():
+        tp, fp, p, r, f1, ap, ood_score, auroc, fpr95 = ap_per_class(stats)
+        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+        mp, mr, map50, map, auroc = p.mean(), r.mean(), ap50.mean(), ap.mean(), auroc
+    else:
+        mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0
+        auroc = 0.0
+
+        # Print results
+    print(f"准确率 = {mp:.2%}, 召回率 = {mr:.2%}, map50 = {map50:.2%}, map = {map:.2%}")
+    print(f"AUROC = {auroc:.2%}")
+
+
 if __name__ == '__main__':
+    # summary()
     main("weight/yolo_final_full_20.pth", "preprocess/pure_drone_val_200.h5")
     # main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")

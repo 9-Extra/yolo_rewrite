@@ -1,13 +1,13 @@
 import os
 
-import cv2
-
+import utils
 import yolo
 import torch
 from torch.utils.data import DataLoader
 from dataset.h5Dataset import H5DatasetYolo
 from rich.progress import Progress, BarColumn, TimeRemainingColumn, TextColumn, TaskProgressColumn
-from yolo.ood_score import build_mlp_classifier
+from safe.safe_method import build_mlp_classifier
+from safe.FeatureExtractStrategies import ExtractConcat
 
 
 def train(network: torch.nn.Module,
@@ -58,9 +58,9 @@ def train(network: torch.nn.Module,
     # torch.save(network.state_dict(), os.path.join(save_path, f"yolo_original.pth"))
 
 
-def build_ood_eval(network: yolo.Network.NetWork, train_loader: DataLoader):
+def build_ood_eval(network: yolo.Network.Yolo, train_loader: DataLoader):
     print("开始构造ood求值")
-    return build_mlp_classifier(network, train_loader)
+    return build_mlp_classifier(network, train_loader, ExtractConcat(), epsilon=0.05)
 
 
 def main(dataset_dir, checkpoint=None):
@@ -72,12 +72,12 @@ def main(dataset_dir, checkpoint=None):
     dataset = H5DatasetYolo(dataset_dir)
 
     if checkpoint:
-        network, opt = yolo.Network.load_checkpoint(checkpoint)
+        network, opt = utils.load_checkpoint(checkpoint)
         num_class = network.detect.nc
         print(f"从模型{os.path.abspath(checkpoint)}开始")
     else:
         num_class = len(dataset.get_label_names())
-        network = yolo.Network.NetWork(num_class)
+        network = yolo.Network.Yolo(num_class)
         opt = torch.optim.Adam(network.parameters())
 
     network.train().to(device, non_blocking=True)
