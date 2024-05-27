@@ -1,19 +1,17 @@
-import pickle
-
 import cv2
 import numpy
 
 import utils
-import yolo
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from dataset.h5Dataset import H5DatasetYolo
 from rich.progress import track
 from sklearn import metrics
 from matplotlib import pyplot
 
+from safe.FeatureExtract import FeatureExtract
+from safe.safe_method import MLP
 from yolo.non_max_suppression import non_max_suppression
-from safe.ood_evaluator import OODEvaluator
 
 
 def box_iou(box1, box2):
@@ -27,7 +25,7 @@ def box_iou(box1, box2):
 
     overlap = numpy.prod(width_height, axis=-1)
 
-    iou = overlap / (box1_area + box2_area - overlap)
+    iou = overlap / (box1_area[:, None] + box2_area - overlap)
 
     return iou
 
@@ -113,8 +111,6 @@ def ap_per_class(stat, eps=1e-16):
     # Create Precision-Recall curve and compute AP for each class
     px, py = numpy.linspace(0, 1, 1000), []  # for plotting
     ap, p, r = numpy.zeros((nc, tp.shape[1])), numpy.zeros((nc, 1000)), numpy.zeros((nc, 1000))
-    # auroc = numpy.zeros(nc)
-    fpr95 = numpy.zeros(nc)
     for ci, c in enumerate(unique_classes):
         i: numpy.ndarray = pred_cls == c  # type: ignore  # 所有当前类型的预测结果
         n_l = nt[ci]  # 目标数
@@ -167,11 +163,10 @@ def ap_per_class(stat, eps=1e-16):
     auroc = metrics.auc(fpr, tpr)
     fpr95 = fpr[numpy.where(tpr > 0.95)[0][0]]
 
-
     # Compute F1 (harmonic mean of precision and recall)
     f1 = 2 * p * r / (p + r + eps)
 
-    i = smooth(f1.mean(0), 0.1).argmax()  # max F1 index
+    i = smooth(f1.mean(0), 0.1).argmax()  # type: ignore # max F1 index
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
     tp = (r * nt).round()  # true positives
     fp = (tp / (p + eps) - tp).round()  # false positives
@@ -218,20 +213,22 @@ def process_batch(detections, labels, iouv):
     return correct
 
 
-def val(network: torch.nn.Module, ood_evaluators: OODEvaluator, train_loader: DataLoader):
+@torch.no_grad()
+def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
     device = next(network.parameters()).device
+    dataloader = DataLoader(val_dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
+                            collate_fn=H5DatasetYolo.collate_fn)
 
     network.eval()
-    feature_extractor = ood_evaluators.feature_extractor
+    feature_extractor = FeatureExtract(ood_evaluator.feature_name_set)
     feature_extractor.attach(network)
 
     iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
     niou = iouv.size
-    fp = 0.0
     stats = []
 
-    for i, (img, target) in enumerate(track(train_loader)):
-        img_h, img_w = img.shape[2:]
+    for i, (img, target) in enumerate(track(dataloader)):
+        img_h, img_w = img.shape[2:]  # noqa
 
         img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
         center_x, center_y, w, h = target[:, 2], target[:, 3], target[:, 4], target[:, 5]
@@ -247,7 +244,7 @@ def val(network: torch.nn.Module, ood_evaluators: OODEvaluator, train_loader: Da
         output = network(img)
         output = network.detect.inference_post_process(output)
         output = non_max_suppression(output)
-        ood_scores = ood_evaluators.score(feature_extractor.get_features(), output)
+        ood_scores = ood_evaluator.score(feature_extractor.get_features(), output)
 
         for i, (pred, ood_score) in enumerate(zip(output, ood_scores)):
             pred = pred.numpy(force=True)
@@ -280,18 +277,26 @@ def val(network: torch.nn.Module, ood_evaluators: OODEvaluator, train_loader: Da
                 stats.append((correct, conf, ood_score, cls, labels[:, 0]))  # (correct, conf, pcls, tcls)
         pass
 
+    feature_extractor.detach()
+
     stats = [numpy.concatenate(x, 0) for x in zip(*stats)]  # to numpy
+
+    return stats
+
+
+def val(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
+    stats = collect_stats(network, ood_evaluator, val_dataset)
 
     if len(stats) and stats[0].any():
         tp, fp, p, r, f1, ap, ood_score, auroc, fpr95 = ap_per_class(stats)
-        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        mp, mr, map50, map, auroc = p.mean(), r.mean(), ap50.mean(), ap.mean(), auroc
+        ap50, ap95, ap = ap[:, 0], ap[:, -1], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+        mp, mr, map50, map95, map, auroc = p.mean(), r.mean(), ap50.mean(), ap95.mean(), ap.mean(), auroc
     else:
-        mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0
+        mp, mr, map50, ap50, map95, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         auroc = 0.0
 
     # Print results
-    print(f"准确率 = {mp:.2%}, 召回率 = {mr:.2%}, map50 = {map50:.2%}, map = {map:.2%}")
+    print(f"准确率 = {mp:.2%}, 召回率 = {mr:.2%}, map50 = {map50:.2%}, map95 = {map95:.2%}, map = {map:.2%}")
     print(f"AUROC = {auroc:.2%}")
     pass
 
@@ -305,34 +310,16 @@ def main(weight_path: str, data_path: str):
     network, ood_evaluators, label_names = utils.load_network(weight_path, load_ood_evaluator=True)
     ood_evaluators.to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
+    print("提取特征层：", ood_evaluators.feature_name_set)
 
     dataset = H5DatasetYolo(data_path)
     print("样本数：", len(dataset))
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
-                            collate_fn=H5DatasetYolo.collate_fn)
 
-    with torch.no_grad():
-        val(network, ood_evaluators, dataloader)
+    val(network, ood_evaluators, dataset)
 
     pass
 
 
-def summary():
-    stats = pickle.load(open("stats.npy", "br"))
-    if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, ood_score, auroc, fpr95 = ap_per_class(stats)
-        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        mp, mr, map50, map, auroc = p.mean(), r.mean(), ap50.mean(), ap.mean(), auroc
-    else:
-        mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0
-        auroc = 0.0
-
-        # Print results
-    print(f"准确率 = {mp:.2%}, 召回率 = {mr:.2%}, map50 = {map50:.2%}, map = {map:.2%}")
-    print(f"AUROC = {auroc:.2%}")
-
-
 if __name__ == '__main__':
-    # summary()
-    main("weight/yolo_final_full_20.pth", "preprocess/pure_drone_val_200.h5")
+    main("weight/yolo_final_full.pth", "preprocess/pure_drone_full_val.h5")
     # main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")

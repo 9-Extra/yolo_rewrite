@@ -156,7 +156,7 @@ def bfgs_attack(model: Module, x: torch.Tensor, c: torch.Tensor, epoch: int):
 
     loop_time = 0
     for i in range(epoch):
-        opt.step(eval_model)
+        opt.step(eval_model)  # noqa
 
         loop_time += 1
         # print("loop time = ", loop_time)

@@ -118,7 +118,7 @@ class ComputeLoss:
 
         indexed_target = self.build_targets(predictions, targets)  # targets
         # Losses
-        for pi, target, balance_weight in zip(predictions, indexed_target, self.balance):  # layer index, layer predictions
+        for pi, target, balance_weight in zip(predictions, indexed_target, self.balance):
             # pi的形状为[batch, anchor, gridy, gridx, 5+num_classes]
             b, a, gj, gi, bbox, anchor, cls = target
             # b 包含此target的图片索引
