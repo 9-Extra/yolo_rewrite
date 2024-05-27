@@ -17,15 +17,16 @@ class MLP(torch.nn.Module):
         self.feature_name_set = feature_name_set
         self.inner = torch.nn.Sequential(
             torch.nn.Linear(in_dim, in_dim // 2),
-            # torch.nn.BatchNorm1d(in_dim // 2),
+            torch.nn.BatchNorm1d(in_dim // 2),
             torch.nn.ReLU(True),
 
             torch.nn.Linear(in_dim // 2, in_dim // 4),
-            # torch.nn.BatchNorm1d(in_dim // 4),
+            torch.nn.BatchNorm1d(in_dim // 4),
             torch.nn.ReLU(True),
 
             torch.nn.Linear(in_dim // 4, 1),
-            torch.nn.Flatten(0)
+            torch.nn.Flatten(0),
+            torch.nn.Sigmoid()
         )
 
     def forward(self, x):
@@ -225,7 +226,7 @@ def train_mlp(mlp: MLP, train_dataset, batch_size: int, epoch: int, device: torc
 
     mlp = mlp.to(device).train()
     opt = torch.optim.Adam(mlp.parameters())
-    loss_func = torch.nn.BCEWithLogitsLoss()
+    loss_func = torch.nn.BCELoss()
 
     with Progress(
             TextColumn("[progress.description]{task.description}"),

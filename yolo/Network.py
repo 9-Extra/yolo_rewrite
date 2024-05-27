@@ -1,5 +1,6 @@
 import torch
 from torch.nn import Module
+from collections import OrderedDict
 import einops
 
 
@@ -40,15 +41,12 @@ class Conv(Module):
     def __init__(self, in_channel, out_channel, kernel_size=1, stride=1, padding=None, groups=1, dilation=1, act=True):
         super().__init__()
         p = self._auto_pad(kernel_size, dilation) if padding is None else padding
-        self.inner = torch.nn.Sequential(
-            torch.nn.Conv2d(in_channel, out_channel, kernel_size, stride, p, groups=groups,
-                            dilation=dilation, bias=False),
-            torch.nn.BatchNorm2d(out_channel),
-            self.default_act if act else torch.nn.Identity()
-        )
+        self.conv = torch.nn.Conv2d(in_channel, out_channel, kernel_size, stride, p, groups=groups, dilation=dilation, bias=False)
+        self.norm = torch.nn.BatchNorm2d(out_channel)
+        self.act = self.default_act if act else torch.nn.Identity()
 
     def forward(self, x):
-        return self.inner(x)
+        return self.act(self.norm(self.conv(x)))
 
     @staticmethod
     def _auto_pad(k, d=1):  # kernel, padding, dilation
@@ -82,8 +80,10 @@ class C3(Module):
         hidden_channel = int(out_channel * e)  # hidden channels
         self.cv1 = Conv(in_channel, hidden_channel, 1, 1)
         self.cv2 = Conv(in_channel, hidden_channel, 1, 1)
-        self.bottlenecks = torch.nn.Sequential(
-            *(Bottleneck(hidden_channel, hidden_channel, shortcut, g, e=1.0) for _ in range(num)))
+        self.bottlenecks = torch.nn.Sequential(OrderedDict(
+            {f"bottleneck{i}": Bottleneck(hidden_channel, hidden_channel, shortcut, g, e=1.0) for i in range(num)}
+        )
+        )
         self.cv3 = Conv(2 * hidden_channel, out_channel, 1)  # optional act=FReLU(c2)
 
     def forward(self, x):
@@ -319,5 +319,7 @@ class Yolo(Module):
 
 if __name__ == '__main__':
     network = Yolo(1)
+    for name, _ in network.named_modules():
+        print(name)
     network(torch.rand((1, 3, 256, 256)))
     print(network)

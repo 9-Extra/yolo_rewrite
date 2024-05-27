@@ -28,7 +28,7 @@ class ExtractAll(Strategy):
     def filter(self, name: str, layer: torch.nn.Module) -> bool:
         if self.pattern.search(name) is None:
             if not isinstance(layer, (
-                    FeatureExporter, FeatureConcat, BackBone, Conv, torch.nn.Sequential, torch.nn.MaxPool2d)):
+                    FeatureExporter, FeatureConcat, BackBone, Conv, torch.nn.Identity, torch.nn.MaxPool2d)):
                 if name != "backbone.inner" and name != "":
                     return True
 
@@ -242,9 +242,9 @@ def search_mlp_classifier_single(feature_data: FeatureDataset, train_features_di
         results.append((name, auroc, fpr95))
 
     with open("summary/feature_layer_result.csv", "w") as f:
-        f.write(f"{'name':50},{'auroc':20},{'fpr95':20}\n")
+        f.write(f"{'name'},{'auroc'},{'fpr95'}\n")
         for name, auroc, fpr95 in results:
-            f.write(f"{name:50},{auroc:20},{fpr95:20}\n")
+            f.write(f"{name},{auroc},{fpr95}\n")
 
     # json.dump(results, open("summary/feature_layer_result.json", "w"))
 
