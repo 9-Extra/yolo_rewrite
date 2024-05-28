@@ -1,5 +1,6 @@
 import cv2
 import numpy
+import torchvision
 
 import utils
 import torch
@@ -10,7 +11,7 @@ from sklearn import metrics
 from matplotlib import pyplot
 
 from safe.FeatureExtract import FeatureExtract
-from safe.safe_method import MLP
+from safe.safe_method import MLP, peek_relative_feature_single_batch
 from yolo.non_max_suppression import non_max_suppression
 
 
@@ -136,16 +137,6 @@ def ap_per_class(stat, eps=1e-16):
         for j in range(tp.shape[1]):
             ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
 
-        # fpr = numpy.concatenate(fpc[:, 0] / n_p)
-        # tpr = tpc[:, 0] / n_p
-        #
-        # pyplot.figure("ROC")
-        # pyplot.plot(fpr, tpr)
-        # pyplot.show()
-
-        # auroc[ci] = metrics.auc(fpr, tpr)
-        # fpr95[ci] = fpr[numpy.where(tpr > 0.95)] 计算上还有问题
-
     # 统计OOD检测结果
     print("总样本数：", len(conf))
     detect_mask = conf != 0
@@ -154,6 +145,7 @@ def ap_per_class(stat, eps=1e-16):
     detect_ood = ood_score[detect_mask]
     detect_gt = tp[detect_mask, 0]  # 真正的目标
     print("检测结果中真正目标数：", numpy.count_nonzero(detect_gt))
+    assert detect_ood.shape[0] == detect_gt.shape[0]
     # TP数
     fpr, tpr, _ = metrics.roc_curve(detect_gt, detect_ood)
     # print(f"{fpr=}\n{tpr=}\n{threshold=}")
@@ -170,7 +162,7 @@ def ap_per_class(stat, eps=1e-16):
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
     tp = (r * nt).round()  # true positives
     fp = (tp / (p + eps) - tp).round()  # false positives
-    return tp, fp, p, r, f1, ap, ood_score, auroc, fpr95
+    return tp, fp, p, r, f1, ap, auroc, fpr95
 
 
 def process_batch(detections, labels, iouv):
@@ -244,11 +236,9 @@ def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dat
         output = network(img)
         output = network.detect.inference_post_process(output)
         output = non_max_suppression(output)
-        ood_scores = ood_evaluator.score(feature_extractor.get_features(), output)
 
-        for i, (pred, ood_score) in enumerate(zip(output, ood_scores)):
-            pred = pred.numpy(force=True)
-            ood_score = ood_score.numpy(force=True)
+        for i, batch_p in enumerate(output):
+            pred = batch_p.numpy(force=True)
 
             # 取得对应batch的正确label
             labels = target[target[:, 0] == i, 1:]
@@ -274,6 +264,12 @@ def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dat
                     correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
                 conf = pred[:, 4]
                 cls = pred[:, 10]
+
+                # 计算ood_score
+                feature = peek_relative_feature_single_batch(feature_extractor.get_features(), batch_p, i)
+                ood_score = ood_evaluator(feature).numpy(force=True)
+                assert ood_score.shape[0] == npr
+
                 stats.append((correct, conf, ood_score, cls, labels[:, 0]))  # (correct, conf, pcls, tcls)
         pass
 
@@ -288,7 +284,7 @@ def val(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
     stats = collect_stats(network, ood_evaluator, val_dataset)
 
     if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, ood_score, auroc, fpr95 = ap_per_class(stats)
+        tp, fp, p, r, f1, ap, auroc, fpr95 = ap_per_class(stats)
         ap50, ap95, ap = ap[:, 0], ap[:, -1], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map95, map, auroc = p.mean(), r.mean(), ap50.mean(), ap95.mean(), ap.mean(), auroc
     else:
@@ -307,7 +303,8 @@ def main(weight_path: str, data_path: str):
 
     print(f"正在验证网络{weight_path}， 使用数据集{data_path}")
 
-    network, ood_evaluators, label_names = utils.load_network(weight_path, load_ood_evaluator=True)
+    network, _, label_names = utils.load_network(weight_path, load_ood_evaluator=False)
+    ood_evaluators = MLP.from_static_dict(torch.load("mlp.pth"))
     ood_evaluators.to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
     print("提取特征层：", ood_evaluators.feature_name_set)

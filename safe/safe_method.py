@@ -17,11 +17,11 @@ class MLP(torch.nn.Module):
         self.feature_name_set = feature_name_set
         self.inner = torch.nn.Sequential(
             torch.nn.Linear(in_dim, in_dim // 2),
-            torch.nn.BatchNorm1d(in_dim // 2),
+            # torch.nn.BatchNorm1d(in_dim // 2),
             torch.nn.ReLU(True),
 
             torch.nn.Linear(in_dim // 2, in_dim // 4),
-            torch.nn.BatchNorm1d(in_dim // 4),
+            # torch.nn.BatchNorm1d(in_dim // 4),
             torch.nn.ReLU(True),
 
             torch.nn.Linear(in_dim // 4, 1),
@@ -35,18 +35,12 @@ class MLP(torch.nn.Module):
     def score(self, feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
         score_list = []
         self.eval()
-        for p in prediction:
-            if p.shape[0] == 0:
-                score_list.append(torch.empty(0))
-                continue
-            feature = peek_relative_feature(feature_dict, [p])
-            score = self.__call__(feature)
+        feature = peek_relative_feature_batched(feature_dict, prediction)
+        score = self.__call__(feature)
 
-            assert score.shape[0] == p.shape[0]
+        assert score.shape[0] == sum(p.shape[0] for p in prediction)
 
-            score_list.append(score)
-
-        return score_list
+        return score
 
     def to_static_dict(self):
         return {
@@ -63,36 +57,44 @@ class MLP(torch.nn.Module):
         return mlp
 
 
-def peek_relative_feature(feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
+def peek_relative_feature_batched(feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
     device = prediction[0].device
     # 遍历每一个batch的输出
     result = []
     for batch_id, batch_p in enumerate(prediction):
-        if batch_p.shape[0] == 0:
-            # result.append(torch.empty(0, device=device))
-            continue
-
-        # origin_bbox = batch_p[..., 0: 4]
-        origin_bbox = batch_p[..., 5: 9]
-
-        batch_bbox = torch.empty([batch_p.shape[0], 5], dtype=torch.float32, device=device)
-        batch_bbox[..., 0] = batch_id
-        batch_bbox[..., 1:] = origin_bbox
-
-        collected = []
-
-        for name, feature in feature_dict.items():
-            b, c, h, w = feature.shape
-
-            relative_feature = torchvision.ops.roi_align(feature, batch_bbox, (2, 2), w)
-            collected.append(relative_feature.flatten(start_dim=1))  # 保留第0维
-
-        collected = torch.cat(collected, dim=1)  # 此时collected第0维为
-        assert collected.shape[0] == batch_p.shape[0]
-
+        collected = peek_relative_feature_single_batch(feature_dict, batch_p, batch_id)
         result.append(collected)
 
     return torch.cat(result) if len(result) != 0 else torch.empty(0, device=device, dtype=torch.float32)
+
+
+def peek_relative_feature_single_batch(feature_dict: dict[str, torch.Tensor], prediction: torch.Tensor, batch_id: int):
+    device = prediction[0].device
+    # 遍历每一个batch的输出
+    result = []
+
+    if prediction.shape[0] == 0:
+        return torch.empty(0, device=device)
+
+    # origin_bbox = batch_p[..., 0: 4]
+    origin_bbox = prediction[..., 5: 9]
+
+    batch_bbox = torch.empty([prediction.shape[0], 5], dtype=torch.float32, device=device)
+    batch_bbox[..., 0] = batch_id
+    batch_bbox[..., 1:] = origin_bbox
+
+    collected = []
+
+    for name, feature in feature_dict.items():
+        b, c, h, w = feature.shape
+
+        relative_feature = torchvision.ops.roi_align(feature, batch_bbox, (2, 2), w)
+        collected.append(relative_feature.flatten(start_dim=1))  # 保留第0维
+
+    collected = torch.cat(collected, dim=1)  # 将来自不同层的特征拼接起来
+    assert collected.shape[0] == prediction.shape[0]
+
+    return collected
 
 
 def peek_relative_feature_to_dict(feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor],
@@ -153,10 +155,10 @@ def mlp_build_dataset(network: torch.nn.Module, name_set: set, train_loader: Dat
             output = network.detect.inference_post_process(output)
             prediction = yolo.non_max_suppression.non_max_suppression(output)
 
-            positive_features.append(peek_relative_feature(feature_extractor.get_features(), prediction))
+            positive_features.append(peek_relative_feature_batched(feature_extractor.get_features(), prediction))
             feature_extractor.ready()
             _ = network(attack_sample)
-            negative_features.append(peek_relative_feature(feature_extractor.get_features(), prediction))
+            negative_features.append(peek_relative_feature_batched(feature_extractor.get_features(), prediction))
 
     feature_extractor.detach()
 
@@ -191,7 +193,7 @@ def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_lo
             TextColumn("{task.completed}/{task.total}"),
             TimeRemainingColumn(),
     ) as process:
-        for img, target in process.track(train_loader, len(train_loader), description="收集特征"):
+        for i, (img, target) in enumerate(process.track(train_loader, len(train_loader), description="收集特征")):
             img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
             target = torch.from_numpy(target).to(device, non_blocking=True)
             img = img.requires_grad_()
@@ -213,10 +215,12 @@ def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_lo
             _ = network(attack_sample)
             peek_relative_feature_to_dict(feature_extractor.get_features(), prediction, out_dict=negative_features)
 
-    feature_extractor.detach()
+            if i % 128 == 127:  # 拼接成块
+                block = i // 128
+                positive_features = {k: [*v[:block], torch.cat(v[block:])] for k, v in positive_features.items()}
+                negative_features = {k: [*v[:block], torch.cat(v[block:])] for k, v in negative_features.items()}
 
-    positive_features = {k: torch.cat(v) for k, v in positive_features.items()}
-    negative_features = {k: torch.cat(v) for k, v in negative_features.items()}
+    feature_extractor.detach()
 
     return positive_features, negative_features
 

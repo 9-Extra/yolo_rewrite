@@ -44,11 +44,12 @@ class FeatureExtract:
 
         self.hooks["_main"] = network.register_forward_pre_hook(_hook)
 
+        matched = 0
         for name, layer in network.named_modules():
             if name in self.name_set:
                 self.register_hook_output(name, layer)
-            else:
-                RuntimeError(f"未知层名称 {name}")
+                matched += 1
+        assert matched == len(self.name_set)
 
     def ready(self):
         assert len(self.hooks) != 0, "需要与神经网络关联"

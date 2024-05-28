@@ -19,7 +19,8 @@ def build_mlp_classifier(network, train_loader: DataLoader, name_set: set, epsil
     dataset = torch.utils.data.TensorDataset(x, y)
 
     mlp = MLP(feature_dim, name_set)
-    train_mlp(mlp, dataset, 64, epoch, device)
+    acc = train_mlp(mlp, dataset, 64, epoch, device)
+    print(f"{acc=}")
 
     return mlp
 
@@ -116,12 +117,7 @@ def main(dataset_dir, checkpoint=None):
     train(network, opt, dataloader, epoch, "weight", 1)
     del opt
 
-    name_set = {
-      "backbone.inner.0.inner.2",
-      "backbone.inner.27.inner.0",
-      "backbone.inner.25.cv2.inner.1",
-      "backbone.inner.21.cv3.inner.1"
-    }
+    name_set = {"backbone.inner.25.cv3.conv", "backbone.inner.21.cv3.conv"}
     ood_evaluator = build_ood_eval(network, name_set, dataloader, epsilon)
 
     torch.save({
@@ -135,4 +131,4 @@ def main(dataset_dir, checkpoint=None):
 pass
 
 if __name__ == '__main__':
-    main("preprocess/pure_drone_train_full.h5", "weight/weight.pth")
+    main("preprocess/pure_drone_train_1000.h5", "weight/yolo_checkpoint_20.pth")

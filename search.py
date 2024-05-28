@@ -4,6 +4,7 @@ import re
 import numpy
 import torch
 import torchvision
+from matplotlib import pyplot
 from rich.progress import track
 from sklearn import metrics
 
@@ -39,19 +40,19 @@ def extract_features(network, dataset: Dataset, epsilon: float, dir_name: str):
     feature_name_set = ExtractAll().get_name_set(network)
     print(f"共提取{len(feature_name_set)}层的特征")
 
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True,
+    dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
                             collate_fn=H5DatasetYolo.collate_fn)
 
     positive_features, negative_features = mlp_build_dataset_separate(network, feature_name_set, dataloader, epsilon)
-    for name in positive_features.keys():
-        positive = positive_features[name]
-        negative = negative_features[name]
-        assert positive.shape[0] == negative.shape[0]  # 正负样本数相同
+    for name in list(positive_features.keys()):
+        positive = positive_features.pop(name)  # save memory
+        negative = negative_features.pop(name)
+        assert sum(p.shape[0] for p in positive) == sum(n.shape[0] for n in negative)  # 正负样本数相同
 
-        x = torch.cat((positive, negative))
+        x = torch.cat((*positive, *negative))
 
         feature_dim = x.shape[1]
-        print(f"使用层：{name}, 样本数：{x.shape[0]}, 特征长度：{feature_dim}")
+        print(f"导出：{name}, 样本数：{x.shape[0]}, 特征长度：{feature_dim}")
 
         torch.save(x, os.path.join(dir_name, name))
 
@@ -179,6 +180,8 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: FeatureDataset):
         if name in name_set:
             collected.append(feature_data.ood_features[name])
 
+    assert len(collected) == len(name_set)
+
     collected = torch.cat(collected, dim=1)  # 拼接来自不同层的特征
     assert collected.shape[0] == feature_data.tp.shape[0]  # 样本数一致
 
@@ -186,6 +189,9 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: FeatureDataset):
     ood_score = mlp(collected).numpy(force=True)
 
     fpr, tpr, _ = metrics.roc_curve(feature_data.tp, ood_score)
+    pyplot.figure("ROC")
+    pyplot.plot(fpr, tpr)
+    pyplot.show()
     auroc = metrics.auc(fpr, tpr)
     fpr95 = fpr[numpy.where(tpr > 0.95)[0][0]].item()
 
@@ -241,6 +247,7 @@ def search_mlp_classifier_single(feature_data: FeatureDataset, train_features_di
         print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
         results.append((name, auroc, fpr95))
 
+    os.makedirs("summary", exist_ok=True)
     with open("summary/feature_layer_result.csv", "w") as f:
         f.write(f"{'name'},{'auroc'},{'fpr95'}\n")
         for name, auroc, fpr95 in results:
@@ -288,37 +295,25 @@ def main(weight_path: str, data_path: str):
     else:
         val_dataset = H5DatasetYolo("preprocess/pure_drone_full_val.h5")
         feature_dataset = collect_stats(network, val_dataset)
-        feature_dataset.save("preprocess/feature_drone_full_val.h5")
+        feature_dataset.save(feature_dataset_path)
 
     del network
 
-    print("开始尝试每一层")
-    search_mlp_classifier_single(feature_dataset, "extract_features", 10, device)
+    # print("开始尝试每一层")
+    # search_mlp_classifier_single(feature_dataset, "extract_features", 10, device)
 
     print("尝试策略")
-    name_set_list = [{"backbone.inner.25.cv3.inner.0",
-                      "backbone.inner.0.inner.2",
-                      "backbone.inner.27.inner.1",
-                      "backbone.inner.29",
-                      "backbone.inner.21.cv3.inner.1",
-                      "backbone.inner.17.inner.0",
-                      "backbone.inner.19"
-                      },
-                     {
-                         "backbone.inner.27.inner.0",
-                         "backbone.inner.0.inner.2",
-                         "backbone.inner.25.cv2.inner.1",
-                         "backbone.inner.21.cv3.inner.1",
-                     },
-                     {
-                         "backbone.inner.25.cv3.inner.0",
-                         "backbone.inner.0.inner.2",
-                         "backbone.inner.27.inner.1",
-                         "backbone.inner.29",
-                     }
+    name_set_list = [*[{"backbone.inner.25.cv3.conv"} for _ in range(3)],
+                     *[{"backbone.inner.25.cv3.conv", "backbone.inner.21.cv3.conv"} for _ in range(3)],
                      ]
-    search_mlp_classifier_multi(name_set_list, feature_dataset, "extract_features", 10, device)
+    # search_mlp_classifier_multi(name_set_list, feature_dataset, "extract_features", 20, device)
+    mlp_network, mlp_acc = train_mlp_from_features_dir({"backbone.inner.25.cv3.conv", "backbone.inner.21.cv3.conv"}, feature_dataset, "extract_features", 20, device)
+    auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_dataset)
+
+    print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
+
+    torch.save(mlp_network.to_static_dict(), "mlp.pth")
 
 
 if __name__ == '__main__':
-    main("weight/weight.pth", "preprocess/ood_val.h5")
+    main("weight/yolo_checkpoint_72.pth", "preprocess/pure_drone_train_full.h5")
