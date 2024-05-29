@@ -10,7 +10,6 @@ from sklearn import metrics
 
 from torch.utils.data import DataLoader, Dataset
 
-import safe.safe_method
 import utils
 import json
 from dataset.h5Dataset import H5DatasetYolo
@@ -84,9 +83,9 @@ class FeatureDataset:
 
 
 @torch.no_grad()
-def collect_stats(network: torch.nn.Module, val_dataset: Dataset):
+def collect_stats(network: torch.nn.Module, val_dataset: H5DatasetYolo):
     device = next(network.parameters()).device
-    dataloader = DataLoader(val_dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
+    dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True,
                             collate_fn=H5DatasetYolo.collate_fn)
 
     network.eval()
@@ -140,11 +139,9 @@ def collect_stats(network: torch.nn.Module, val_dataset: Dataset):
 
                 conf = predictions[:, 4]
 
-                origin_bbox = batch_p[..., 5: 9]
-
                 batch_bbox = torch.empty([batch_p.shape[0], 5], dtype=torch.float32, device=device)
                 batch_bbox[..., 0] = i
-                batch_bbox[..., 1:] = origin_bbox
+                batch_bbox[..., 1:] = batch_p[..., 5: 9]
 
                 for name, feature in feature_extractor.get_features().items():
                     b, c, h, w = feature.shape
@@ -155,16 +152,15 @@ def collect_stats(network: torch.nn.Module, val_dataset: Dataset):
                 stats.append((correct, conf))
         pass
 
-    tp, conf = [numpy.concatenate(x, 0) for x in zip(*stats)]  # to numpy
+    tp, conf = [numpy.concatenate(x, 0) for x in zip(*stats)]
     ood_feature_collect = {k: torch.cat(v) for k, v in ood_feature_collect.items()}
 
-    assert tp.shape[0] == conf.shape[0]
-    assert all([tp.shape[0] == v.shape[0] for v in ood_feature_collect.values()])
+    result_num = tp.shape[0]
+    assert all(result_num == v.shape[0] for v in ood_feature_collect.values())
 
     # 统计OOD检测结果
-    # detect_ood = ood_score
-    # detect_gt = tp[0]  # 真正的目标
-    # print("检测结果中真正目标数：", numpy.count_nonzero(detect_gt))
+    print("真正检测结果数：", result_num)
+    print("检测结果中正确的目标数：", numpy.count_nonzero(tp[:, 0]))
     # # TP数
     # fpr, tpr, _ = metrics.roc_curve(detect_gt, detect_ood)
 
@@ -204,7 +200,7 @@ def train_mlp_from_features_dir(feature_name_set: set, feature_data: FeatureData
     assert len(feature_name_set) != 0, "搞啥呢"
     if len(feature_name_set) > 1:
         x = []  # 需要保证顺序network.named_modules的顺序一致
-        for name in feature_data.ood_features.keys():
+        for name in feature_data.ood_features.keys():  # 这里只是利用feature_data中特征顺序与网络相同的特性
             if name in feature_name_set:
                 fx = torch.load(os.path.join(train_features_dir, name))
                 x.append(fx)
@@ -294,6 +290,7 @@ def main(weight_path: str, data_path: str):
         feature_dataset = FeatureDataset.load(feature_dataset_path)
     else:
         val_dataset = H5DatasetYolo("preprocess/pure_drone_full_val.h5")
+        print("样本数：", len(val_dataset))
         feature_dataset = collect_stats(network, val_dataset)
         feature_dataset.save(feature_dataset_path)
 

@@ -1,6 +1,5 @@
 import cv2
 import numpy
-import torchvision
 
 import utils
 import torch
@@ -141,10 +140,9 @@ def ap_per_class(stat, eps=1e-16):
     print("总样本数：", len(conf))
     detect_mask = conf != 0
     print("真正检测结果数：", numpy.count_nonzero(detect_mask))
-    # detect_conf = conf[detect_mask]
     detect_ood = ood_score[detect_mask]
     detect_gt = tp[detect_mask, 0]  # 真正的目标
-    print("检测结果中真正目标数：", numpy.count_nonzero(detect_gt))
+    print("检测结果中正确的目标数：", numpy.count_nonzero(detect_gt))
     assert detect_ood.shape[0] == detect_gt.shape[0]
     # TP数
     fpr, tpr, _ = metrics.roc_curve(detect_gt, detect_ood)
@@ -208,12 +206,14 @@ def process_batch(detections, labels, iouv):
 @torch.no_grad()
 def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
     device = next(network.parameters()).device
-    dataloader = DataLoader(val_dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
+    dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True,
                             collate_fn=H5DatasetYolo.collate_fn)
 
     network.eval()
     feature_extractor = FeatureExtract(ood_evaluator.feature_name_set)
     feature_extractor.attach(network)
+
+    ood_evaluator.eval()
 
     iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
     niou = iouv.size
@@ -238,32 +238,32 @@ def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dat
         output = non_max_suppression(output)
 
         for i, batch_p in enumerate(output):
-            pred = batch_p.numpy(force=True)
-
+            predictions = batch_p.numpy(force=True)
             # 取得对应batch的正确label
             labels = target[target[:, 0] == i, 1:]
 
             # 检测结果实际上分三类：正确匹配的正样本，没有被匹配的正样本，误识别的负样本
             # 在进行OOD检测时需要区分这三种样本
 
-            nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
+            nl, npr = labels.shape[0], predictions.shape[0]  # number of labels, predictions
 
             if npr == 0:
                 # 没有预测任何东西
                 if nl != 0:  # 但是实际上有东西
                     correct = numpy.zeros([nl, niou], dtype=bool)  # 全错
                     # 没有被匹配的正样本
-                    stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
+                    # stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
             else:
                 # 预测出了东西
                 if nl != 0:  # 实际上也有东西，这个时候才需要进行判断
                     # 可能产生三种样本
-                    correct = process_batch(pred, labels, iouv)
+                    correct = process_batch(predictions, labels, iouv)
                 else:
                     # 误识别的负样本
                     correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
-                conf = pred[:, 4]
-                cls = pred[:, 10]
+
+                conf = predictions[:, 4]
+                cls = predictions[:, 10]
 
                 # 计算ood_score
                 feature = peek_relative_feature_single_batch(feature_extractor.get_features(), batch_p, i)
@@ -294,6 +294,7 @@ def val(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
     # Print results
     print(f"准确率 = {mp:.2%}, 召回率 = {mr:.2%}, map50 = {map50:.2%}, map95 = {map95:.2%}, map = {map:.2%}")
     print(f"AUROC = {auroc:.2%}")
+
     pass
 
 
@@ -303,16 +304,15 @@ def main(weight_path: str, data_path: str):
 
     print(f"正在验证网络{weight_path}， 使用数据集{data_path}")
 
-    network, _, label_names = utils.load_network(weight_path, load_ood_evaluator=False)
-    ood_evaluators = MLP.from_static_dict(torch.load("mlp.pth"))
-    ood_evaluators.to(device, non_blocking=True)
+    network, ood_evaluator, label_names = utils.load_network(weight_path, load_ood_evaluator=True)
+    # ood_evaluator = MLP.from_static_dict(torch.load("mlp.pth"))
+    ood_evaluator.to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
-    print("提取特征层：", ood_evaluators.feature_name_set)
+    print("提取特征层：", ood_evaluator.feature_name_set)
 
     dataset = H5DatasetYolo(data_path)
-    print("样本数：", len(dataset))
 
-    val(network, ood_evaluators, dataset)
+    val(network, ood_evaluator, dataset)
 
     pass
 

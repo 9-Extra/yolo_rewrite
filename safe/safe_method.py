@@ -69,7 +69,7 @@ def peek_relative_feature_batched(feature_dict: dict[str, torch.Tensor], predict
 
 
 def peek_relative_feature_single_batch(feature_dict: dict[str, torch.Tensor], prediction: torch.Tensor, batch_id: int):
-    device = prediction[0].device
+    device = prediction.device
     # 遍历每一个batch的输出
     result = []
 

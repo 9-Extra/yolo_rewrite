@@ -131,4 +131,4 @@ def main(dataset_dir, checkpoint=None):
 pass
 
 if __name__ == '__main__':
-    main("preprocess/pure_drone_train_1000.h5", "weight/yolo_checkpoint_20.pth")
+    main("preprocess/pure_drone_train_full.h5", "weight/yolo_checkpoint_72.pth")
