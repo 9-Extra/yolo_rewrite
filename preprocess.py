@@ -7,7 +7,8 @@ import numpy
 import tqdm
 
 from dataset.CocoBird import CocoBird
-from dataset.DroneDataset import DroneDataset
+from dataset.CocoDataset import CocoDataset
+from dataset.DroneDataset import DroneDataset, DroneTestDataset
 from dataset.RawDataset import RawDataset, mix_raw_dataset
 from dataset.BirdVSDroneBird import BirdVSDroneBird
 import utils
@@ -68,7 +69,7 @@ def main(dist: str, data: RawDataset):
         h5f.create_dataset("obj_name", data=data.get_label_names(), dtype=h5py.special_dtype(vlen=str))
 
         bbox_idx_offset = 0
-        for i, d in enumerate(tqdm.tqdm(data, total=image_count)):
+        for i, d in enumerate(tqdm.tqdm(data, total=image_count, desc="预处理图像")):
             # data.display(i)
             img, mapped_objs = process(d.img, d.objs)
             bbox_num = mapped_objs.shape[0]
@@ -85,13 +86,39 @@ def main(dist: str, data: RawDataset):
 
 
 if __name__ == '__main__':
-    drone = DroneDataset("G:/datasets/DroneTrainDataset", split="val")
+    # drone = DroneDataset("G:/datasets/DroneTrainDataset", split="val")
+    # coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
+    # # bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
+    # print(f"包含 {len(drone)} 无人机，{len(coco_bird)}鸟")
+    # mixed = mix_raw_dataset([drone, coco_bird])
+    # # mixed = mix_raw_dataset([drone, bird, coco_bird])
+    # # mixed = mix_raw_dataset(drone)
+    # # main("preprocess/pure_bird.h5", bird)
+    # # 10289 无人机，320鸟
+    # main("preprocess/ood_val.h5", mixed)
+
+    # drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
+    # print("总图像数=", len(drone_test))
+    # main("preprocess/test_pure_drone.h5", drone_test)
+
+    # drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
+    # print("总图像数=", len(drone_test))
+    # coco = CocoDataset(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
+    # coco = coco.ramdom_sample(len(drone_test))
+    # for item in coco.items:
+    #     item.objs.clear()
+    # coco.label_names.clear()
+    # mixed = mix_raw_dataset([drone_test, coco])
+    # print("混合总图像数=", len(mixed))
+    # main("preprocess/test_drone_with_coco.h5", mixed)
+
+    drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
+    print("总图像数=", len(drone_test))
     bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
-    print(f"包含 {len(drone)} 无人机，{len(bird)}鸟")
-    mixed = mix_raw_dataset([drone, bird])
-    # coco_bird = dataset = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
-    # mixed = mix_raw_dataset([drone, bird, coco_bird])
-    # mixed = mix_raw_dataset(drone)
-    # main("preprocess/pure_bird.h5", bird)
-    # 10289 无人机，320鸟
-    main("preprocess/ood_val.h5", mixed)
+    print("鸟图像数=", len(bird))
+    mixed = mix_raw_dataset([drone_test, bird])
+    print("混合总图像数=", len(mixed))
+    main("preprocess/test_drone_with_bird.h5", mixed)
+
+
+

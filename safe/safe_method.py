@@ -26,11 +26,13 @@ class MLP(torch.nn.Module):
 
             torch.nn.Linear(in_dim // 4, 1),
             torch.nn.Flatten(0),
-            torch.nn.Sigmoid()
         )
 
     def forward(self, x):
-        return self.inner(x)
+        if self.training:
+            return self.inner(x)
+        else:
+            return torch.sigmoid_(self.inner(x))
 
     def score(self, feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
         score_list = []
@@ -229,8 +231,8 @@ def train_mlp(mlp: MLP, train_dataset, batch_size: int, epoch: int, device: torc
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size, shuffle=True)
 
     mlp = mlp.to(device).train()
-    opt = torch.optim.Adam(mlp.parameters())
-    loss_func = torch.nn.BCELoss()
+    opt = torch.optim.Adam(mlp.parameters(), lr=0.0001)
+    loss_func = torch.nn.BCEWithLogitsLoss()
 
     with Progress(
             TextColumn("[progress.description]{task.description}"),

@@ -1,4 +1,5 @@
 import os
+import random
 
 import cv2
 
@@ -28,6 +29,11 @@ class RawDataset:
 
     def __len__(self):
         return len(self.items)
+
+    def ramdom_sample(self, num: int):
+        assert num <= len(self.items)
+        samples = random.sample(self.items, num)
+        return RawDataset(samples, self.label_names)
 
     def get_label_names(self) -> list[str]:
         return self.label_names

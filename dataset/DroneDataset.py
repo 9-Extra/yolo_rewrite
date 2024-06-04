@@ -40,8 +40,27 @@ class DroneDataset(RawDataset):
             self.items = self.items[:sp]
         elif split == "val":
             self.items = self.items[sp:]
+        elif split == "all":
+            pass
         else:
-            raise ValueError("split must be train or val")
+            raise ValueError("split must be train or val or all")
+
+        super().__init__(self.items, ["drone"])
+
+
+class DroneTestDataset(RawDataset):
+    items: list[DataItem]
+
+    def __init__(self, root: str):
+        img_dir = os.path.join(root, "Drone_TestSet")
+        ann_dir = os.path.join(root, "Drone_TestSet_XMLs")
+
+        self.items: list[DataItem] = []
+        for xml in tqdm.tqdm(os.listdir(ann_dir)):
+            filename, res = parse_xml(os.path.join(ann_dir, xml))
+            if len(res) != 0:
+                self.items.append(DataItem(os.path.join(img_dir, filename), res))
+        pass
 
         super().__init__(self.items, ["drone"])
 

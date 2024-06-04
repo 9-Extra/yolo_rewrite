@@ -41,7 +41,7 @@ def detect(network: yolo.Network.Yolo,
     extractor = FeatureExtract(ood_evaluator.feature_name_set)
     extractor.attach(network)
     network.eval().to(device, non_blocking=True)
-    ood_evaluator.to(device, non_blocking=True)
+    ood_evaluator.eval().to(device, non_blocking=True)
 
     for img in images:
 

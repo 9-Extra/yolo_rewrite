@@ -147,9 +147,9 @@ def ap_per_class(stat, eps=1e-16):
     # TP数
     fpr, tpr, _ = metrics.roc_curve(detect_gt, detect_ood)
     # print(f"{fpr=}\n{tpr=}\n{threshold=}")
-    pyplot.figure("ROC")
-    pyplot.plot(fpr, tpr)
-    pyplot.show()
+    # pyplot.figure("ROC")
+    # pyplot.plot(fpr, tpr)
+    # pyplot.show()
     auroc = metrics.auc(fpr, tpr)
     fpr95 = fpr[numpy.where(tpr > 0.95)[0][0]]
 
@@ -289,11 +289,11 @@ def val(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
         mp, mr, map50, map95, map, auroc = p.mean(), r.mean(), ap50.mean(), ap95.mean(), ap.mean(), auroc
     else:
         mp, mr, map50, ap50, map95, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        auroc = 0.0
+        auroc, fpr95 = 0.0, 0.0
 
     # Print results
     print(f"准确率 = {mp:.2%}, 召回率 = {mr:.2%}, map50 = {map50:.2%}, map95 = {map95:.2%}, map = {map:.2%}")
-    print(f"AUROC = {auroc:.2%}")
+    print(f"AUROC = {auroc:.2} FPR95={fpr95:.2}")
 
     pass
 
@@ -304,8 +304,8 @@ def main(weight_path: str, data_path: str):
 
     print(f"正在验证网络{weight_path}， 使用数据集{data_path}")
 
-    network, ood_evaluator, label_names = utils.load_network(weight_path, load_ood_evaluator=True)
-    # ood_evaluator = MLP.from_static_dict(torch.load("mlp.pth"))
+    network, ood_evaluator, label_names = utils.load_network(weight_path, load_ood_evaluator=False)
+    ood_evaluator = MLP.from_static_dict(torch.load("mlp.pth"))
     ood_evaluator.to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
     print("提取特征层：", ood_evaluator.feature_name_set)
@@ -319,4 +319,7 @@ def main(weight_path: str, data_path: str):
 
 if __name__ == '__main__':
     main("weight/yolo_final_full.pth", "preprocess/pure_drone_full_val.h5")
+    main("weight/yolo_final_full.pth", "preprocess/test_pure_drone.h5")
+    main("weight/yolo_final_full.pth", "preprocess/test_drone_with_bird.h5")
+    main("weight/yolo_final_full.pth", "preprocess/test_drone_with_coco.h5")
     # main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")

@@ -10,7 +10,7 @@ from safe.safe_method import mlp_build_dataset, MLP, train_mlp
 
 
 def build_mlp_classifier(network, train_loader: DataLoader, name_set: set, epsilon: float,
-                         epoch=30):
+                         epoch=50):
     device = next(network.parameters()).device
     x, y = mlp_build_dataset(network, name_set, train_loader, epsilon)
     feature_dim = x.shape[1]
@@ -92,7 +92,7 @@ def main(dataset_dir, checkpoint=None):
     torch.backends.cudnn.benchmark = True
 
     epoch = 0
-    epsilon = 0.01
+    epsilon = 0.02
 
     dataset = H5DatasetYolo(dataset_dir)
 
@@ -117,7 +117,7 @@ def main(dataset_dir, checkpoint=None):
     train(network, opt, dataloader, epoch, "weight", 1)
     del opt
 
-    name_set = {"backbone.inner.25.cv3.conv", "backbone.inner.21.cv3.conv"}
+    name_set = {"backbone.inner.25.cv3.conv", "backbone.inner.29.cv3.conv"}
     ood_evaluator = build_ood_eval(network, name_set, dataloader, epsilon)
 
     torch.save({

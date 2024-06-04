@@ -185,9 +185,9 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: FeatureDataset):
     ood_score = mlp(collected).numpy(force=True)
 
     fpr, tpr, _ = metrics.roc_curve(feature_data.tp, ood_score)
-    pyplot.figure("ROC")
-    pyplot.plot(fpr, tpr)
-    pyplot.show()
+    # pyplot.figure("ROC")
+    # pyplot.plot(fpr, tpr)
+    # pyplot.show()
     auroc = metrics.auc(fpr, tpr)
     fpr95 = fpr[numpy.where(tpr > 0.95)[0][0]].item()
 
@@ -244,7 +244,7 @@ def search_mlp_classifier_single(feature_data: FeatureDataset, train_features_di
         results.append((name, auroc, fpr95))
 
     os.makedirs("summary", exist_ok=True)
-    with open("summary/feature_layer_result.csv", "w") as f:
+    with open("summary/feature_layer_result_odd.csv", "w") as f:
         f.write(f"{'name'},{'auroc'},{'fpr95'}\n")
         for name, auroc, fpr95 in results:
             f.write(f"{name},{auroc},{fpr95}\n")
@@ -270,7 +270,7 @@ def search_mlp_classifier_multi(name_set_list: list[set],
         print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
         results.append((list(name_set), auroc, fpr95))
 
-    json.dump(results, open("summary/feature_layer_result_multi.json", "w"))
+    json.dump(results, open("summary/feature_layer_result_multi_deep.json", "w"))
 
 
 def main(weight_path: str, data_path: str):
@@ -283,9 +283,9 @@ def main(weight_path: str, data_path: str):
     network.to(device, non_blocking=True)
 
     # train_dataset = H5DatasetYolo(data_path)  # 用于训练OOD检测用
-    # extract_features(network, train_dataset, 0.01, "extract_features")
+    # extract_features(network, train_dataset, 0.02, "extract_features")
 
-    feature_dataset_path = "preprocess/feature_drone_full_val.h5"
+    feature_dataset_path = "preprocess/feature_pure_val n.h5"
     if os.path.isfile(feature_dataset_path):
         feature_dataset = FeatureDataset.load(feature_dataset_path)
     else:
@@ -301,10 +301,11 @@ def main(weight_path: str, data_path: str):
 
     print("尝试策略")
     name_set_list = [*[{"backbone.inner.25.cv3.conv"} for _ in range(3)],
-                     *[{"backbone.inner.25.cv3.conv", "backbone.inner.21.cv3.conv"} for _ in range(3)],
+                     *[{"backbone.inner.25.cv3.conv", "backbone.inner.29.cv3.conv"} for _ in range(3)],
+                     *[{"backbone.inner.25.cv3.conv", "backbone.inner.29.cv3.conv", "backbone.inner.27.conv"} for _ in range(3)],
                      ]
     # search_mlp_classifier_multi(name_set_list, feature_dataset, "extract_features", 20, device)
-    mlp_network, mlp_acc = train_mlp_from_features_dir({"backbone.inner.25.cv3.conv", "backbone.inner.21.cv3.conv"}, feature_dataset, "extract_features", 20, device)
+    mlp_network, mlp_acc = train_mlp_from_features_dir({"backbone.inner.25.cv3.conv"}, feature_dataset, "extract_features", 30, device)
     auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_dataset)
 
     print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
