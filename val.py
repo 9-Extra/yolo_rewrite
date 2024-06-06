@@ -145,13 +145,15 @@ def ap_per_class(stat, eps=1e-16):
     print("检测结果中正确的目标数：", numpy.count_nonzero(detect_gt))
     assert detect_ood.shape[0] == detect_gt.shape[0]
     # TP数
-    fpr, tpr, _ = metrics.roc_curve(detect_gt, detect_ood)
+    fpr, tpr, threshold = metrics.roc_curve(detect_gt, detect_ood)
     # print(f"{fpr=}\n{tpr=}\n{threshold=}")
     # pyplot.figure("ROC")
     # pyplot.plot(fpr, tpr)
     # pyplot.show()
     auroc = metrics.auc(fpr, tpr)
-    fpr95 = fpr[numpy.where(tpr > 0.95)[0][0]]
+    tpr95_index = numpy.where(tpr > 0.95)[0][0]
+    fpr95 = fpr[tpr95_index]
+    threshold = threshold[tpr95_index]
 
     # Compute F1 (harmonic mean of precision and recall)
     f1 = 2 * p * r / (p + r + eps)
@@ -160,7 +162,7 @@ def ap_per_class(stat, eps=1e-16):
     p, r, f1 = p[:, i], r[:, i], f1[:, i]
     tp = (r * nt).round()  # true positives
     fp = (tp / (p + eps) - tp).round()  # false positives
-    return tp, fp, p, r, f1, ap, auroc, fpr95
+    return tp, fp, p, r, f1, ap, auroc, fpr95, threshold
 
 
 def process_batch(detections, labels, iouv):
@@ -252,7 +254,7 @@ def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dat
                 if nl != 0:  # 但是实际上有东西
                     correct = numpy.zeros([nl, niou], dtype=bool)  # 全错
                     # 没有被匹配的正样本
-                    # stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
+                    stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
             else:
                 # 预测出了东西
                 if nl != 0:  # 实际上也有东西，这个时候才需要进行判断
@@ -284,16 +286,17 @@ def val(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
     stats = collect_stats(network, ood_evaluator, val_dataset)
 
     if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, auroc, fpr95 = ap_per_class(stats)
+        tp, fp, p, r, f1, ap, auroc, fpr95, threshold = ap_per_class(stats)
         ap50, ap95, ap = ap[:, 0], ap[:, -1], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map95, map, auroc = p.mean(), r.mean(), ap50.mean(), ap95.mean(), ap.mean(), auroc
     else:
         mp, mr, map50, ap50, map95, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        auroc, fpr95 = 0.0, 0.0
+        auroc, fpr95, threshold = 0.0, 0.0, 0.0
 
     # Print results
-    print(f"准确率 = {mp:.2%}, 召回率 = {mr:.2%}, map50 = {map50:.2%}, map95 = {map95:.2%}, map = {map:.2%}")
-    print(f"AUROC = {auroc:.2} FPR95={fpr95:.2}")
+    print(f"map50 = {map50:.2%}, map = {map:.2%}, 召回率 = {mr:.2%}")
+    print(f"AUROC = {auroc:.2} FPR95={fpr95:.2}, threshold={threshold:.4}")
+    print(f"{map50:.2%}&{map:.2%}&{mr:.2%}&{auroc:.2}&{fpr95:.2}")
 
     pass
 
@@ -318,7 +321,7 @@ def main(weight_path: str, data_path: str):
 
 
 if __name__ == '__main__':
-    main("weight/yolo_final_full.pth", "preprocess/pure_drone_full_val.h5")
+    # main("weight/yolo_final_full.pth", "preprocess/pure_drone_full_val.h5")
     main("weight/yolo_final_full.pth", "preprocess/test_pure_drone.h5")
     main("weight/yolo_final_full.pth", "preprocess/test_drone_with_bird.h5")
     main("weight/yolo_final_full.pth", "preprocess/test_drone_with_coco.h5")

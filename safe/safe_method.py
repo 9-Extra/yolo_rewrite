@@ -1,5 +1,9 @@
+import os
+from collections.abc import Callable
+
 import torch
 import torchvision
+from torch.nn import Module
 from torch.utils.data import DataLoader
 from rich.progress import Progress, BarColumn, TaskProgressColumn, TextColumn, TimeRemainingColumn
 
@@ -38,11 +42,18 @@ class MLP(torch.nn.Module):
         score_list = []
         self.eval()
         feature = peek_relative_feature_batched(feature_dict, prediction)
-        score = self.__call__(feature)
+        if feature.shape[0] == 0:
+            return []
+        score = self.__call__(feature).numpy(force=True)
+        # rebuild list
+        start = 0
+        for p in prediction:
+            score_list.append(score[start:p.shape[0]])
+            start += p.shape[0]
 
-        assert score.shape[0] == sum(p.shape[0] for p in prediction)
+        assert start == score.shape[0]
 
-        return score
+        return score_list
 
     def to_static_dict(self):
         return {
@@ -73,7 +84,6 @@ def peek_relative_feature_batched(feature_dict: dict[str, torch.Tensor], predict
 def peek_relative_feature_single_batch(feature_dict: dict[str, torch.Tensor], prediction: torch.Tensor, batch_id: int):
     device = prediction.device
     # 遍历每一个batch的输出
-    result = []
 
     if prediction.shape[0] == 0:
         return torch.empty(0, device=device)
@@ -119,7 +129,7 @@ def peek_relative_feature_to_dict(feature_dict: dict[str, torch.Tensor], predict
             b, c, h, w = feature.shape
 
             relative_feature = torchvision.ops.roi_align(feature, batch_bbox, (2, 2), w)
-            out_dict.setdefault(name, []).append(relative_feature.flatten(start_dim=1).cpu())  # 保留第0维
+            out_dict.setdefault(name, []).append(relative_feature.flatten(start_dim=1))  # 保留第0维
 
 
 @torch.no_grad()
@@ -176,13 +186,35 @@ def mlp_build_dataset(network: torch.nn.Module, name_set: set, train_loader: Dat
     return x, y
 
 
+@torch.enable_grad()
+def pdg_attack(model: Module, x: torch.Tensor, loss_func: Callable, y: torch.Tensor, epsilon: float, epoch: int = 20):
+    attack = x.clone()  # + torch.zeros_like(x).uniform_(-epsilon, epsilon)  # 初始化时添加随机噪声，效果更好
+
+    alpha = epsilon / epoch * 3
+    for i in range(epoch):
+        attack.detach_().requires_grad_()  # 与之前的计算过程分离，为计算梯度做准备
+
+        output = model(attack)  # 输入模型进行推理
+        loss = loss_func(output, y)  # 计算损失函数
+        grad = torch.autograd.grad(loss, attack)[0]
+
+        with torch.no_grad():
+            attack += alpha * torch.sign(grad)  # 和FSGM的过程相同
+            attack = (attack - x).clip(-epsilon, epsilon) + x  # 限制变化范围(-epsilon, epsilon)
+            attack.clip_(0, 1)
+
+    return attack.detach_()
+
+
 @torch.no_grad()
-def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_loader: DataLoader,
+def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_loader: DataLoader, dir_name: str,
                                epsilon: float):
     device = next(network.parameters()).device
     loss_func = yolo.loss.ComputeLoss(network)
 
     network.eval()
+
+    block_size = 128
 
     feature_extractor = FeatureExtract(name_set)
     feature_extractor.attach(network)
@@ -203,11 +235,15 @@ def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_lo
             with torch.enable_grad():
                 feature_extractor.ready()
                 output = network(img)
-                loss = loss_func(output, target)
+                # loss = loss_func(output, target)
 
             # FGSM产生对抗样本
-            grad = torch.autograd.grad(loss, img)[0]
-            attack_sample = (img + torch.sign(grad) * epsilon).clip(0, 1)
+            # grad = torch.autograd.grad(loss, img)[0]
+            # attack_sample = (img + torch.sign(grad) * epsilon).clip(0, 1)
+            # PGD
+            feature_extractor.detach()
+            attack_sample = pdg_attack(network, img, loss_func, target, epsilon, 5)
+            feature_extractor.attach(network)
 
             output = network.detect.inference_post_process(output)
             prediction = yolo.non_max_suppression.non_max_suppression(output)
@@ -217,14 +253,48 @@ def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_lo
             _ = network(attack_sample)
             peek_relative_feature_to_dict(feature_extractor.get_features(), prediction, out_dict=negative_features)
 
-            if i % 128 == 127:  # 拼接成块
-                block = i // 128
-                positive_features = {k: [*v[:block], torch.cat(v[block:])] for k, v in positive_features.items()}
-                negative_features = {k: [*v[:block], torch.cat(v[block:])] for k, v in negative_features.items()}
+            if (i + 1) % block_size == 0:  # 拼接成块
+                block = i // block_size
+                block_dir = os.path.join(dir_name, str(block))
+                os.makedirs(block_dir, exist_ok=True)
+
+                for name in list(positive_features.keys()):
+                    positive = positive_features.pop(name)  # save memory
+                    negative = negative_features.pop(name)
+                    assert sum(p.shape[0] for p in positive) == sum(n.shape[0] for n in negative)  # 正负样本数相同
+
+                    pos = torch.cat(positive)
+                    neg = torch.cat(negative)
+
+                    torch.save({
+                        "pos": pos,
+                        "neg": neg
+                    }, os.path.join(block_dir, name))
+
+                assert len(positive_features) == len(negative_features) and len(negative_features) == 0
+
+        # 保存剩下的
+        if len(positive_features) != 0:
+            block = i // block_size + 1
+            block_dir = os.path.join(dir_name, str(block))
+            os.makedirs(block_dir, exist_ok=True)
+
+            for name in list(positive_features.keys()):
+                positive = positive_features.pop(name)  # save memory
+                negative = negative_features.pop(name)
+                assert sum(p.shape[0] for p in positive) == sum(n.shape[0] for n in negative)  # 正负样本数相同
+
+                pos = torch.cat(positive)
+                neg = torch.cat(negative)
+
+                torch.save({
+                    "pos": pos,
+                    "neg": neg
+                }, os.path.join(block_dir, name))
+
+            assert len(positive_features) == len(negative_features) and len(negative_features) == 0
 
     feature_extractor.detach()
-
-    return positive_features, negative_features
 
 
 def train_mlp(mlp: MLP, train_dataset, batch_size: int, epoch: int, device: torch.device):

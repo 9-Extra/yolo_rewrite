@@ -92,7 +92,7 @@ def main(dataset_dir, checkpoint=None):
     torch.backends.cudnn.benchmark = True
 
     epoch = 0
-    epsilon = 0.02
+    epsilon = 0.01
 
     dataset = H5DatasetYolo(dataset_dir)
 

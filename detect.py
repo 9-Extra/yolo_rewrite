@@ -7,26 +7,35 @@ import yolo
 import torch
 import cv2
 
+from dataset.DroneDataset import DroneTestDataset
+from dataset.RawDataset import RawDataset
 from safe.safe_method import MLP
 from safe.FeatureExtract import FeatureExtract
 from yolo.non_max_suppression import non_max_suppression
 
 
-def display(img: numpy.ndarray, objs, ood_scores, label_names):
+def display(img: numpy.ndarray, objs, is_ood: numpy.ndarray, label_names):
     # objs: numpy.ndarray = objs.numpy(force=True)
-    for obj, ood_score in zip(objs, ood_scores):
+    for obj, ood in zip(objs, is_ood):
         bbox, conf, origin_bbox, layer_id, cls = numpy.split(obj, [4, 5, 9, 10])
         x1, y1, x2, y2 = [int(p) for p in bbox]
         cls = int(cls.item())
         conf = conf.item()
         # print(x1, y1, x2, y2, cls, conf)
 
-        img = cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        img = cv2.putText(img, label_names[cls] + f"{conf:%}", (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0),
+        if not ood:
+            color = (0, 255, 0)
+            text = f"{label_names[cls]}:{conf:%}"
+        else:
+            color = (255, 0, 0)
+            text = "OOD"
+
+        img = cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        img = cv2.putText(img, text, (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                          color,
                           2,
                           cv2.LINE_AA)
-        img = cv2.putText(img, f"{ood_score.item():.3}", (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2,
-                          cv2.LINE_AA)
+
     cv2.imshow('image', img)
     cv2.waitKey(0)
 
@@ -36,6 +45,7 @@ def detect(network: yolo.Network.Yolo,
            ood_evaluator: MLP,
            images: list[str],
            label_names,
+           threshold,
            device: torch.device
            ):
     extractor = FeatureExtract(ood_evaluator.feature_name_set)
@@ -60,27 +70,35 @@ def detect(network: yolo.Network.Yolo,
 
         for img, output, score in zip([ori_img], output, scores):
             # if output.shape[0] != 0:
-            display(img, output, score, label_names)
+
+            is_ood = score < threshold
+            display(img, output, is_ood, label_names)
 
     extractor.detach()
 
     pass
 
 
-def main(weight_path, img_dir):
+def main(weight_path, raw_dataset: RawDataset):
     device = torch.device("cuda")
 
-    network, ood_evaluators, label_names = utils.load_network(weight_path, load_ood_evaluator=True)
-
+    network, _, label_names = utils.load_network(weight_path, load_ood_evaluator=False)
+    ood_evaluator = MLP.from_static_dict(torch.load("mlp.pth"))
+    ood_evaluator.eval().to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
 
-    images = [os.path.join(img_dir, x) for x in os.listdir(img_dir)]
+    images = []
+    for item in raw_dataset.items:
+        if len(item.objs) != 0:
+            images.append(item.img)
 
-    detect(network, ood_evaluators, images, label_names, device)
+    threshold = 0.5
+
+    detect(network, ood_evaluator, images, label_names, threshold, device)
 
     pass
 
 
 if __name__ == '__main__':
     # main("weight/yolo_final_full.pth", r"G:\datasets\BirdVsDrone\Drones")
-    main("weight/yolo_final_full.pth", r"D:\迅雷下载\train2017")
+    main("weight/yolo_final_full.pth", DroneTestDataset(r"G:\datasets\DroneTestDataset"))

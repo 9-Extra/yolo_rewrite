@@ -259,7 +259,8 @@ class Detect(Module):
             wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
 
             # 为了后续的OOD检测时从特征图中的正确的位置提取相关特征，添加每个输出的bbox的具体位置
-            origin_bbox = self.origin_bbox[i].expand(bs, -1, -1, -1, -1)
+            # origin_bbox = self.origin_bbox[i].expand(bs, -1, -1, -1, -1)
+            origin_bbox = torch.cat((xy, wh), dim=4) / 640
             # 为了后续知道此检测结果来自哪个layer，添加一个layer编号
             layer_id = torch.tensor(i, dtype=torch.float32, device=xy.device).expand(bs, self.na, ny, nx, 1)
 
