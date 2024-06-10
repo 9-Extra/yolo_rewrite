@@ -1,18 +1,19 @@
 import os
 
-import utils
 import yolo
+from schedules.schedule import Config
 import torch
 from torch.utils.data import DataLoader
+
 from dataset.h5Dataset import H5DatasetYolo
 from rich.progress import Progress, BarColumn, TimeRemainingColumn, TextColumn, TaskProgressColumn
 from safe.safe_method import mlp_build_dataset, MLP, train_mlp
 
 
-def build_mlp_classifier(network, train_loader: DataLoader, name_set: set, epsilon: float,
+def build_mlp_classifier(network, train_loader: DataLoader, name_set: set, attack_method, epsilon: float,
                          epoch=50):
     device = next(network.parameters()).device
-    x, y = mlp_build_dataset(network, name_set, train_loader, epsilon)
+    x, y = mlp_build_dataset(network, name_set, train_loader, attack_method, epsilon)
     feature_dim = x.shape[1]
     print("训练样本数：", x.shape[0])
     print("特征长度：", feature_dim)
@@ -50,7 +51,8 @@ def train(network: torch.nn.Module,
         epoch_task = progress.add_task("epoch")
 
         for epoch in progress.track(range(epochs), epochs, train_task, description=f"epoch"):
-            for i, (img, target) in enumerate(progress.track(train_loader, len(train_loader), epoch_task, description=f"train")):
+            for i, (img, target) in enumerate(
+                    progress.track(train_loader, len(train_loader), epoch_task, description=f"train")):
                 # ori =cv2.cvtColor(img[0].transpose(1, 2, 0), cv2.COLOR_RGB2BGR)
                 # cv2.imshow("show", ori)
                 # cv2.waitKey(0)
@@ -78,33 +80,25 @@ def train(network: torch.nn.Module,
     # torch.save(network.state_dict(), os.path.join(save_path, f"yolo_original.pth"))
 
 
-def build_ood_eval(network: yolo.Network.Yolo, name_set: set, train_loader: DataLoader, epsilon):
+def build_ood_eval(network: yolo.Network.Yolo, name_set: set, train_loader: DataLoader, attack_method, epsilon):
     print("开始构造ood求值")
     return build_mlp_classifier(network,
                                 train_loader,
                                 name_set,
+                                attack_method,
                                 epsilon
                                 )
 
 
-def main(dataset_dir, checkpoint=None):
+def main(config: Config):
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
-    epoch = 0
-    epsilon = 0.01
-
-    dataset = H5DatasetYolo(dataset_dir)
-
-    if checkpoint:
-        network, opt = utils.load_checkpoint(checkpoint, device)
-        num_class = network.detect.nc
-        print(f"从模型{os.path.abspath(checkpoint)}开始")
-    else:
-        num_class = len(dataset.get_label_names())
-        network = yolo.Network.Yolo(num_class)
-        network.to(device, non_blocking=True)
-        opt = torch.optim.Adam(network.parameters())
+    dataset = config.train_dataset
+    num_class = config.num_class
+    network = yolo.Network.Yolo(num_class)
+    network.to(device, non_blocking=True)
+    opt = config.yolo_optimizer(network.parameters())
 
     dataloader = DataLoader(dataset,
                             batch_size=8,
@@ -114,21 +108,21 @@ def main(dataset_dir, checkpoint=None):
                             collate_fn=H5DatasetYolo.collate_fn
                             )
 
-    train(network, opt, dataloader, epoch, "weight", 1)
+    train(network, opt, dataloader, config.yolo_epoch, config.dir_checkpoint, 1)
     del opt
 
-    name_set = {"backbone.inner.25.cv3.conv", "backbone.inner.29.cv3.conv"}
-    ood_evaluator = build_ood_eval(network, name_set, dataloader, epsilon)
-
+    os.makedirs(os.path.dirname(config.file_yolo_weight), exist_ok=True)
     torch.save({
-        "num_class": num_class,
         "network": network.state_dict(),
-        "ood_evaluator": ood_evaluator.to_static_dict(),
-        "epoch": epoch,
-        "label_names": dataset.get_label_names()
-    }, os.path.join("weight", f"yolo_final_full.pth"))
+    }, config.file_yolo_weight)
+
+    os.makedirs(os.path.dirname(config.file_mlp_weight), exist_ok=True)
+    name_set = {"backbone.inner.25.cv3.conv", "backbone.inner.29.cv3.conv"}
+    ood_evaluator = build_ood_eval(network, name_set, dataloader, config.attack_method, config.mlp_epsilon)
+    torch.save(ood_evaluator.to_static_dict(), config.file_yolo_weight)
+
 
 pass
 
 if __name__ == '__main__':
-    main("preprocess/pure_drone_train_full.h5", "weight/yolo_checkpoint_72.pth")
+    main(Config())

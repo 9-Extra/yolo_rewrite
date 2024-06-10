@@ -134,7 +134,7 @@ def peek_relative_feature_to_dict(feature_dict: dict[str, torch.Tensor], predict
 
 @torch.no_grad()
 def mlp_build_dataset(network: torch.nn.Module, name_set: set, train_loader: DataLoader,
-                      epsilon: float):
+                      attack_method: str, epsilon: float):
     device = next(network.parameters()).device
     loss_func = yolo.loss.ComputeLoss(network)
 
@@ -158,11 +158,13 @@ def mlp_build_dataset(network: torch.nn.Module, name_set: set, train_loader: Dat
             with torch.enable_grad():
                 feature_extractor.ready()
                 output = network(img)
-                loss = loss_func(output, target)
+                if attack_method == "fgsm":
+                    loss = loss_func(output, target)
+                    grad = torch.autograd.grad(loss, img)[0]
 
-            # FGSM产生对抗样本
-            grad = torch.autograd.grad(loss, img)[0]
-            attack_sample = (img + torch.sign(grad) * epsilon).clip(0, 1)
+            if attack_method == "fgsm":
+                # FGSM产生对抗样本
+                attack_sample = (img + torch.sign(grad) * epsilon).clip(0, 1)
 
             output = network.detect.inference_post_process(output)
             prediction = yolo.non_max_suppression.non_max_suppression(output)
@@ -207,7 +209,7 @@ def pdg_attack(model: Module, x: torch.Tensor, loss_func: Callable, y: torch.Ten
 
 
 @torch.no_grad()
-def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_loader: DataLoader, dir_name: str,
+def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_loader: DataLoader, attack_method, dir_name: str,
                                epsilon: float):
     device = next(network.parameters()).device
     loss_func = yolo.loss.ComputeLoss(network)
@@ -235,15 +237,19 @@ def mlp_build_dataset_separate(network: torch.nn.Module, name_set: set, train_lo
             with torch.enable_grad():
                 feature_extractor.ready()
                 output = network(img)
-                # loss = loss_func(output, target)
+                if attack_method == "fgsm":
+                    loss = loss_func(output, target)
+                    grad = torch.autograd.grad(loss, img)[0]
 
-            # FGSM产生对抗样本
-            # grad = torch.autograd.grad(loss, img)[0]
-            # attack_sample = (img + torch.sign(grad) * epsilon).clip(0, 1)
-            # PGD
-            feature_extractor.detach()
-            attack_sample = pdg_attack(network, img, loss_func, target, epsilon, 5)
-            feature_extractor.attach(network)
+            if attack_method == "fgsm":
+                # FGSM产生对抗样本
+                attack_sample = (img + torch.sign(grad) * epsilon).clip(0, 1)
+            elif attack_method == "pgd":
+                feature_extractor.detach()
+                attack_sample = pdg_attack(network, img, loss_func, target, epsilon, 5)
+                feature_extractor.attach(network)
+            else:
+                raise RuntimeError("未知对抗攻击方法")
 
             output = network.detect.inference_post_process(output)
             prediction = yolo.non_max_suppression.non_max_suppression(output)

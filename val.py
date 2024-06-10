@@ -1,16 +1,17 @@
 import cv2
 import numpy
 
-import utils
 import torch
 from torch.utils.data import DataLoader, Dataset
+
+import yolo.Network
 from dataset.h5Dataset import H5DatasetYolo
 from rich.progress import track
 from sklearn import metrics
-from matplotlib import pyplot
 
 from safe.FeatureExtract import FeatureExtract
 from safe.safe_method import MLP, peek_relative_feature_single_batch
+from schedules.schedule import Config
 from yolo.non_max_suppression import non_max_suppression
 
 
@@ -301,13 +302,12 @@ def val(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
     pass
 
 
-def main(weight_path: str, data_path: str):
+def main(network: yolo.Network.Yolo, data_path: str):
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
-    print(f"正在验证网络{weight_path}， 使用数据集{data_path}")
+    print(f"正在使用数据集{data_path}验证网络")
 
-    network, ood_evaluator, label_names = utils.load_network(weight_path, load_ood_evaluator=False)
     ood_evaluator = MLP.from_static_dict(torch.load("mlp.pth"))
     ood_evaluator.to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
@@ -321,8 +321,9 @@ def main(weight_path: str, data_path: str):
 
 
 if __name__ == '__main__':
+    config = Config()
     # main("weight/yolo_final_full.pth", "preprocess/pure_drone_full_val.h5")
-    main("weight/yolo_final_full.pth", "preprocess/test_pure_drone.h5")
-    main("weight/yolo_final_full.pth", "preprocess/test_drone_with_bird.h5")
-    main("weight/yolo_final_full.pth", "preprocess/test_drone_with_coco.h5")
+    main(config.trained_yolo_network, "preprocess/test_pure_drone.h5")
+    main(config.trained_yolo_network, "preprocess/test_drone_with_bird.h5")
+    main(config.trained_yolo_network, "preprocess/test_drone_with_coco.h5")
     # main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")

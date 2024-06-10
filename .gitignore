@@ -1,6 +1,4 @@
 /.idea
 /__pycache__
-/weight
-/preprocess
-/extract_features
-/summary
+/run/weight
+/run

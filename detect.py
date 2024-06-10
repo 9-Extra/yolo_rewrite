@@ -1,8 +1,6 @@
-import os
-
 import numpy
 
-import utils
+import preprocess
 import yolo
 import torch
 import cv2
@@ -11,6 +9,7 @@ from dataset.DroneDataset import DroneTestDataset
 from dataset.RawDataset import RawDataset
 from safe.safe_method import MLP
 from safe.FeatureExtract import FeatureExtract
+from schedules.schedule import Config
 from yolo.non_max_suppression import non_max_suppression
 
 
@@ -55,7 +54,7 @@ def detect(network: yolo.Network.Yolo,
 
     for img in images:
 
-        ori_img = utils.letterbox_fixed_size(cv2.imread(img), (640, 640))[0]
+        ori_img = preprocess.letterbox_fixed_size(cv2.imread(img), (640, 640))[0]
         # ori_img = utils.letterbox_stride(cv2.imread(img), 32)
         img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2HSV_FULL).transpose(2, 0, 1)[numpy.newaxis, ...]
         img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
@@ -79,10 +78,9 @@ def detect(network: yolo.Network.Yolo,
     pass
 
 
-def main(weight_path, raw_dataset: RawDataset):
+def main(network: yolo.Network.Yolo, label_names, raw_dataset: RawDataset):
     device = torch.device("cuda")
 
-    network, _, label_names = utils.load_network(weight_path, load_ood_evaluator=False)
     ood_evaluator = MLP.from_static_dict(torch.load("mlp.pth"))
     ood_evaluator.eval().to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
@@ -100,5 +98,8 @@ def main(weight_path, raw_dataset: RawDataset):
 
 
 if __name__ == '__main__':
+    config = Config()
     # main("weight/yolo_final_full.pth", r"G:\datasets\BirdVsDrone\Drones")
-    main("weight/yolo_final_full.pth", DroneTestDataset(r"G:\datasets\DroneTestDataset"))
+    main(config.trained_yolo_network,
+         config.train_dataset.get_label_names(),
+         DroneTestDataset(r"G:\datasets\DroneTestDataset"))

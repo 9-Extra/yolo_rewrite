@@ -52,6 +52,12 @@ class RawDataset:
         cv2.waitKey(0)
 
 
+def delete_all_object(dataset: RawDataset):
+    dataset.label_names.clear()
+    for item in dataset.items:
+        item.objs.clear()
+
+
 def mix_raw_dataset(datasets: list[RawDataset]) -> RawDataset:
     print("mixing datasets")
     for i, d in enumerate(datasets):

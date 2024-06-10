@@ -6,12 +6,53 @@ import h5py
 import numpy
 import tqdm
 
-from dataset.CocoBird import CocoBird
-from dataset.CocoDataset import CocoDataset
-from dataset.DroneDataset import DroneDataset, DroneTestDataset
+from dataset.DroneDataset import DroneTestDataset
 from dataset.RawDataset import RawDataset, mix_raw_dataset
 from dataset.BirdVSDroneBird import BirdVSDroneBird
-import utils
+
+
+def letterbox_fixed_size(im, new_shape: tuple[int, int], color=(114, 114, 114), scaleup=False):
+    """Resizes and pads image to new_shape with stride-multiple constraints, returns resized image, ratio, padding."""
+    height, width = im.shape[:2]  # current shape [height, width]
+    # Scale ratio (new / old)
+    r = min(new_shape[0] / height, new_shape[1] / width)
+    if not scaleup:  # only scale down, do not scale up (for better val mAP)
+        r = min(r, 1.0)
+
+    # Compute padding
+    new_unpad = round(width * r), round(height * r)
+    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
+
+    ratio = new_unpad[0] / width, new_unpad[1] / height
+
+    if (width, height) != new_unpad:  # resize
+        im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
+    top, bottom = dh // 2, dh - (dh // 2)  # divide padding into 2 parts
+    left, right = dw // 2, dw - (dw // 2)
+    im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
+    return im, ratio, (top, left)
+
+
+def letterbox_stride(im: numpy.ndarray, stride: int = 32, color=(114, 114, 114)):
+    height, width, channel = im.shape
+    target_width = width + stride - 1 - (width - 1) % stride
+    target_height = height + stride - 1 - (height - 1) % stride
+    if target_width == width and target_height == height:
+        return im  # skip
+
+    result = numpy.full_like(im, color, shape=(target_height, target_width, channel), subok=False)
+    left = (target_width - width) // 2
+    top = (target_height - height) // 2
+    result[top:top + height, left: left + width] = im
+
+    return result
+
+
+def crop_image(img: numpy.ndarray, bbox, size: tuple[int, int]):
+    x, y, w, h = bbox
+    img = img[y:y + h, x:x + w, :]
+    img = cv2.resize(img, size, interpolation=cv2.INTER_LINEAR)
+    return img
 
 
 def display(img, objs, label_names):
@@ -32,7 +73,7 @@ def display(img, objs, label_names):
 
 def process_data(origin_img: str, objs: list, target_size: tuple[int, int]):
     origin_img = cv2.imread(origin_img)
-    img, ratio, (top, left) = utils.letterbox_fixed_size(origin_img, target_size)
+    img, ratio, (top, left) = letterbox_fixed_size(origin_img, target_size)
     mapped_objs = numpy.empty((len(objs), 5), dtype=numpy.float32)
     for i, obj in enumerate(objs):
         x, y, width, height = obj[1]
@@ -86,32 +127,6 @@ def main(dist: str, data: RawDataset):
 
 
 if __name__ == '__main__':
-    # drone = DroneDataset("G:/datasets/DroneTrainDataset", split="val")
-    # coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
-    # # bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
-    # print(f"包含 {len(drone)} 无人机，{len(coco_bird)}鸟")
-    # mixed = mix_raw_dataset([drone, coco_bird])
-    # # mixed = mix_raw_dataset([drone, bird, coco_bird])
-    # # mixed = mix_raw_dataset(drone)
-    # # main("preprocess/pure_bird.h5", bird)
-    # # 10289 无人机，320鸟
-    # main("preprocess/ood_val.h5", mixed)
-
-    # drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
-    # print("总图像数=", len(drone_test))
-    # main("preprocess/test_pure_drone.h5", drone_test)
-
-    # drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
-    # print("总图像数=", len(drone_test))
-    # coco = CocoDataset(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
-    # coco = coco.ramdom_sample(len(drone_test))
-    # for item in coco.items:
-    #     item.objs.clear()
-    # coco.label_names.clear()
-    # mixed = mix_raw_dataset([drone_test, coco])
-    # print("混合总图像数=", len(mixed))
-    # main("preprocess/test_drone_with_coco.h5", mixed)
-
     drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
     print("总图像数=", len(drone_test))
     bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
@@ -119,6 +134,3 @@ if __name__ == '__main__':
     mixed = mix_raw_dataset([drone_test, bird])
     print("混合总图像数=", len(mixed))
     main("preprocess/test_drone_with_bird.h5", mixed)
-
-
-

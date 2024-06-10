@@ -1,6 +1,7 @@
 import os
 
 from dataset.RawDataset import RawDataset, DataItem
+from typing import Literal
 import xml.dom.minidom
 import tqdm
 
@@ -24,7 +25,7 @@ def parse_xml(xml_path: str):
 class DroneDataset(RawDataset):
     items: list[DataItem]
 
-    def __init__(self, root: str, split: str = "train"):
+    def __init__(self, root: str, split: Literal["train", "val", "all"] = "train"):
         img_dir = os.path.join(root, "Drone_TrainSet")
         ann_dir = os.path.join(root, "Drone_TrainSet_XMLs")
 

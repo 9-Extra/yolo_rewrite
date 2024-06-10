@@ -4,14 +4,13 @@ import re
 import numpy
 import torch
 import torchvision
-from matplotlib import pyplot
 from rich.progress import track
 from sklearn import metrics
 
 from torch.utils.data import DataLoader, Dataset
 
-import utils
 import json
+
 from dataset.h5Dataset import H5DatasetYolo
 from safe.FeatureExtract import FeatureExtract, Strategy
 from safe.safe_method import mlp_build_dataset_separate, MLP, train_mlp
@@ -33,7 +32,7 @@ class ExtractAll(Strategy):
                     return True
 
 
-def extract_features(network, dataset: Dataset, epsilon: float, dir_name: str):
+def extract_features(network, dataset: Dataset, attack_method, epsilon: float, dir_name: str):
     os.makedirs(dir_name, exist_ok=True)
 
     feature_name_set = ExtractAll().get_name_set(network)
@@ -43,7 +42,7 @@ def extract_features(network, dataset: Dataset, epsilon: float, dir_name: str):
                             collate_fn=H5DatasetYolo.collate_fn)
 
     cache_dir = dir_name + "_cache"
-    mlp_build_dataset_separate(network, feature_name_set, dataloader, cache_dir, epsilon)
+    mlp_build_dataset_separate(network, feature_name_set, dataloader, attack_method, cache_dir, epsilon)
     for name in list(feature_name_set):
         positive = []
         negative = []
@@ -62,7 +61,7 @@ def extract_features(network, dataset: Dataset, epsilon: float, dir_name: str):
         torch.save(x, os.path.join(dir_name, name))
 
 
-class FeatureDataset:
+class DetectedDataset:
     """
     检测模型在验证集上运行后检测结果和特征，用于进一步的OOD检测
     """
@@ -85,7 +84,7 @@ class FeatureDataset:
     @staticmethod
     def load(path):
         data = torch.load(path)
-        return FeatureDataset(data["tp"], data["conf"], data["ood_features"])
+        return DetectedDataset(data["tp"], data["conf"], data["ood_features"])
 
 
 @torch.no_grad()
@@ -170,10 +169,10 @@ def collect_stats(network: torch.nn.Module, val_dataset: H5DatasetYolo):
     # # TP数
     # fpr, tpr, _ = metrics.roc_curve(detect_gt, detect_ood)
 
-    return FeatureDataset(tp[:, 0], conf, ood_feature_collect)
+    return DetectedDataset(tp[:, 0], conf, ood_feature_collect)
 
 
-def compute_auroc_fpr95(mlp: MLP, feature_data: FeatureDataset):
+def compute_auroc_fpr95(mlp: MLP, feature_data: DetectedDataset):
     # 需要保证feature_dict中顺序与network.named_modules的顺序一致
     # feature_dict为每一层已经经过roi_align的特征，包含 样本数 个batch
     collected = []
@@ -200,7 +199,7 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: FeatureDataset):
     return auroc, fpr95
 
 
-def train_mlp_from_features_dir(feature_name_set: set, feature_data: FeatureDataset, train_features_dir: str,
+def train_mlp_from_features_dir(feature_name_set: set, feature_data: DetectedDataset, train_features_dir: str,
                                 epoch: int,
                                 device: torch.device):
     assert len(feature_name_set) != 0, "搞啥呢"
@@ -234,8 +233,12 @@ def train_mlp_from_features_dir(feature_name_set: set, feature_data: FeatureData
     return mlp, mlp_acc
 
 
-def search_mlp_classifier_single(feature_data: FeatureDataset, train_features_dir: str, epoch: int,
-                                 device: torch.device):
+def search_single_layers(
+        feature_data: DetectedDataset,
+        train_features_dir: str,
+        summary_path: str,
+        epoch: int,
+        device: torch.device):
     """
     搜索所有的单层
     """
@@ -249,20 +252,19 @@ def search_mlp_classifier_single(feature_data: FeatureDataset, train_features_di
         print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
         results.append((name, auroc, fpr95))
 
-    os.makedirs("summary", exist_ok=True)
-    with open("summary/feature_layer_result_bias.csv", "w") as f:
+    os.makedirs(os.path.dirname(summary_path), exist_ok=True)
+    with open(summary_path, "w") as f:
         f.write(f"{'name'},{'auroc'},{'fpr95'}\n")
         for name, auroc, fpr95 in results:
             f.write(f"{name},{auroc},{fpr95}\n")
 
-    # json.dump(results, open("summary/feature_layer_result.json", "w"))
 
-
-def search_mlp_classifier_multi(name_set_list: list[set],
-                                feature_data: FeatureDataset,
-                                train_features_dir: str,
-                                epoch: int,
-                                device: torch.device):
+def search_multi_layers(name_set_list: list[set],
+                        feature_data: DetectedDataset,
+                        train_features_dir: str,
+                        summary_path: str,
+                        epoch: int,
+                        device: torch.device):
     """
     搜索指定的特征策略
     """
@@ -276,51 +278,6 @@ def search_mlp_classifier_multi(name_set_list: list[set],
         print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
         results.append((list(name_set), auroc, fpr95))
 
-    json.dump(results, open("summary/feature_layer_result_no_bias.json", "w"))
+    os.makedirs(os.path.dirname(summary_path), exist_ok=True)
+    json.dump(results, open(summary_path, "w"))
 
-
-def main(weight_path: str, data_path: str):
-    device = torch.device("cuda")
-    torch.backends.cudnn.benchmark = True
-
-    os.makedirs("summary", exist_ok=True)
-
-    print(f"正在使用权重{weight_path}， 使用数据集{data_path}")
-
-    network, _, _ = utils.load_network(weight_path, load_ood_evaluator=False)
-    network.to(device, non_blocking=True)
-
-    extract_features_dir = "extract_features_smaller"
-    train_dataset = H5DatasetYolo(data_path)  # 用于训练OOD检测用
-    extract_features(network, train_dataset, 0.001, extract_features_dir)
-
-    feature_dataset_path = "preprocess/feature_ood_val.h5"
-    if os.path.isfile(feature_dataset_path):
-        feature_dataset = FeatureDataset.load(feature_dataset_path)
-    else:
-        val_dataset = H5DatasetYolo("preprocess/ood_val.h5")
-        print("样本数：", len(val_dataset))
-        feature_dataset = collect_stats(network, val_dataset)
-        feature_dataset.save(feature_dataset_path)
-
-    del network
-
-    # print("开始尝试每一层")
-    # search_mlp_classifier_single(feature_dataset, extract_features_dir, 10, device)
-
-    print("尝试策略")
-    name_set_list = [*[{"backbone.inner.25.cv3.norm"} for _ in range(3)],
-                     *[{"backbone.inner.25.cv3.norm", "backbone.inner.21.cv3.norm"} for _ in range(3)],
-                     *[{"backbone.inner.25.cv3.norm", "backbone.inner.21.cv3.norm", "backbone.inner.29.cv3.norm"} for _ in range(3)],
-                     ]
-    # search_mlp_classifier_multi(name_set_list, feature_dataset, extract_features_dir, 15, device)
-    mlp_network, mlp_acc = train_mlp_from_features_dir({"backbone.inner.25.cv3.norm"}, feature_dataset, extract_features_dir, 20, device)
-    auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_dataset)
-
-    print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
-
-    torch.save(mlp_network.to_static_dict(), "mlp.pth")
-
-
-if __name__ == '__main__':
-    main("weight/yolo_checkpoint_72.pth", "preprocess/pure_drone_train_full.h5")
