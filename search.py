@@ -11,18 +11,27 @@ from torch.utils.data import DataLoader, Dataset
 
 import json
 
+import yolo
 from dataset.h5Dataset import H5DatasetYolo
-from safe.FeatureExtract import FeatureExtract, Strategy
+from safe.FeatureExtract import FeatureExtract
 from safe.safe_method import mlp_build_dataset_separate, MLP, train_mlp
 from val import process_batch
 from yolo.Network import FeatureExporter, BackBone, Conv, FeatureConcat
 from yolo.non_max_suppression import non_max_suppression
 
 
-class ExtractAll(Strategy):
+class ExtractAll:
 
     def __init__(self):
         self.pattern = re.compile("detect|bottlenecks")
+
+    def get_name_set(self, network: torch.nn.Module):
+        names = set()
+        for name, layer in network.named_modules():
+            if self.filter(name, layer):
+                names.add(name)
+
+        return names
 
     def filter(self, name: str, layer: torch.nn.Module) -> bool:
         if self.pattern.search(name) is None:
@@ -32,7 +41,7 @@ class ExtractAll(Strategy):
                     return True
 
 
-def extract_features(network, dataset: Dataset, attack_method, epsilon: float, dir_name: str):
+def extract_features(network: yolo.Network.Yolo, dataset: Dataset, attack_method, epsilon: float, dir_name: str):
     os.makedirs(dir_name, exist_ok=True)
 
     feature_name_set = ExtractAll().get_name_set(network)
@@ -187,7 +196,8 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: DetectedDataset):
     assert collected.shape[0] == feature_data.tp.shape[0]  # 样本数一致
 
     mlp.eval()
-    ood_score = mlp(collected).numpy(force=True)
+    with torch.no_grad():
+        ood_score = mlp(collected).numpy(force=True)
 
     fpr, tpr, _ = metrics.roc_curve(feature_data.tp, ood_score)
     # pyplot.figure("ROC")
@@ -199,13 +209,13 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: DetectedDataset):
     return auroc, fpr95
 
 
-def train_mlp_from_features_dir(feature_name_set: set, feature_data: DetectedDataset, train_features_dir: str,
+def train_mlp_from_features_dir(feature_name_set: set, layer_order: list[str], train_features_dir: str,
                                 epoch: int,
                                 device: torch.device):
     assert len(feature_name_set) != 0, "搞啥呢"
     if len(feature_name_set) > 1:
         x = []  # 需要保证顺序network.named_modules的顺序一致
-        for name in feature_data.ood_features.keys():  # 这里只是利用feature_data中特征顺序与网络相同的特性
+        for name in layer_order:  # 这里只是利用feature_data中特征顺序与网络相同的特性
             if name in feature_name_set:
                 fx = torch.load(os.path.join(train_features_dir, name))
                 x.append(fx)
@@ -228,6 +238,7 @@ def train_mlp_from_features_dir(feature_name_set: set, feature_data: DetectedDat
     dataset = torch.utils.data.TensorDataset(x, y)
 
     mlp = MLP(feature_dim, feature_name_set)
+    # mlp = torch.compile(mlp, backend="cudagraphs", fullgraph=True, disable=False)
     mlp_acc = train_mlp(mlp, dataset, 64, epoch, device)
 
     return mlp, mlp_acc
@@ -243,9 +254,10 @@ def search_single_layers(
     搜索所有的单层
     """
     results = []
+    layer_order = list(feature_data.ood_features.keys())
     for name in os.listdir(train_features_dir):
         # train
-        mlp_network, mlp_acc = train_mlp_from_features_dir({name}, feature_data, train_features_dir, epoch, device)
+        mlp_network, mlp_acc = train_mlp_from_features_dir({name}, layer_order, train_features_dir, epoch, device)
         # val
         auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
 
@@ -269,9 +281,10 @@ def search_multi_layers(name_set_list: list[set],
     搜索指定的特征策略
     """
     results = []
+    layer_order = list(feature_data.ood_features.keys())
     for name_set in name_set_list:
         # train
-        mlp_network, mlp_acc = train_mlp_from_features_dir(name_set, feature_data, train_features_dir, epoch, device)
+        mlp_network, mlp_acc = train_mlp_from_features_dir(name_set, layer_order, train_features_dir, epoch, device)
         # val
         auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
 

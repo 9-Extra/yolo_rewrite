@@ -1,7 +1,13 @@
+from typing import Any
+
 import torch
 from torch.nn import Module
 from collections import OrderedDict
 import einops
+import pytorch_lightning
+
+from yolo import loss
+from yolo.non_max_suppression import non_max_suppression
 
 
 class FeatureExporter(Module):
@@ -41,7 +47,8 @@ class Conv(Module):
     def __init__(self, in_channel, out_channel, kernel_size=1, stride=1, padding=None, groups=1, dilation=1, act=True):
         super().__init__()
         p = self._auto_pad(kernel_size, dilation) if padding is None else padding
-        self.conv = torch.nn.Conv2d(in_channel, out_channel, kernel_size, stride, p, groups=groups, dilation=dilation, bias=False)
+        self.conv = torch.nn.Conv2d(in_channel, out_channel, kernel_size, stride, p, groups=groups, dilation=dilation,
+                                    bias=False)
         self.norm = torch.nn.BatchNorm2d(out_channel)
         self.act = self.default_act if act else torch.nn.Identity()
 
@@ -153,40 +160,6 @@ class BackBone(Module):
             C3(512, 512, 2, False)  # 23
         )
 
-        # self.inner = torch.nn.Sequential(OrderedDict({
-        #     "conv1": Conv(3, 32, 6, 2, 2),
-        #     "conv2": Conv(32, 64, 3, 2),
-        #     "C3_1": C3(64, 64, 2),
-        #     "conv3": Conv(64, 128, 3, 2),
-        #     "exp_b4": FeatureExporter(self.feature_storage, "b4"),
-        #     "C3_2": C3(128, 128, 4),
-        #     "conv4": Conv(128, 256, 3, 2),
-        #     "exp_b6": FeatureExporter(self.feature_storage, "b6"),
-        #     "C3_3": C3(256, 256, 6),
-        #     "conv5": Conv(256, 512, 3, 2),
-        #     "C3_4": C3(512, 512, 2),
-        #     "SPP": SPPF(512, 512, 5),
-        #     # head
-        #     "conv6": Conv(512, 256, 1, 1),  # 10
-        #     "exp_x10": FeatureExporter(self.feature_storage, "x10"),
-        #     "upsample1": torch.nn.Upsample(None, 2, "nearest"),  # 11
-        #     "cat_b6": FeatureConcat(self.feature_storage, "b6"),  # 12
-        #     "C3_5": C3(256 + 256, 256, 2, False),  # 13
-        #     "conv7": Conv(256, 128, 1, 1),  # 14
-        #     "exp_x14": FeatureExporter(self.feature_storage, "x14"),
-        #     "upsample2": torch.nn.Upsample(None, 2, "nearest"),  # 15
-        #     "cat_b4": FeatureConcat(self.feature_storage, "b4"),  # 16
-        #     "C3_6": C3(128 + 128, 128, 2, False),  # 17
-        #     "exp_x17": FeatureExporter(self.feature_storage, "x17"),
-        #     "conv8": Conv(128, 128, 3, 2),  # 18
-        #     "cat_x14": FeatureConcat(self.feature_storage, "x14"),  # 19
-        #     "C3_7": C3(256, 256, 2, False),  # 20
-        #     "exp_x20": FeatureExporter(self.feature_storage, "x20"),
-        #     "conv9": Conv(256, 256, 3, 2),  # 21
-        #     "cat_x10": FeatureConcat(self.feature_storage, "x10"),  # 22
-        #     "C3_8": C3(512, 512, 2, False)  # 23
-        # }))
-
     def forward(self, x):
         x23 = self.inner(x)
         x17 = self.feature_storage["x17"]
@@ -198,6 +171,7 @@ class BackBone(Module):
 
 class Detect(Module):
     # YOLOv5 Detect head for detection models
+    anchors: torch.Tensor
 
     def __init__(self, nc: int, anchors: list, ch: list):  # detection layer
         super().__init__()
@@ -302,25 +276,44 @@ _ANCHORS = [
 ]
 
 
-class Yolo(Module):
+class Yolo(pytorch_lightning.LightningModule):
 
     def __init__(self, num_class: int):
         super(Yolo, self).__init__()
         self.backbone = BackBone()
-
         self.detect = Detect(nc=num_class, anchors=_ANCHORS, ch=[128, 256, 512])
+        self.loss_func = loss.ComputeLoss(num_class, _ANCHORS, self.detect.anchors)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x17, x20, x23 = self.backbone(x)
 
         x = self.detect([x17, x20, x23])
 
         return x
 
+    def loss(self, x: torch.Tensor, y: torch.Tensor):
+        return self.loss_func(self(x), y)
+
+    @torch.inference_mode()
+    def inference(self, x):
+        raw_output = self(x)
+        raw_result = self.detect.inference_post_process(raw_output)
+        return non_max_suppression(raw_result)
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters())
+
+    def training_step(self, batch, batch_idx):
+        img, target = batch
+        img = torch.from_numpy(img).to(self.device, non_blocking=True).float() / 255
+        target = torch.from_numpy(target).to(self.device, non_blocking=True)
+
+        loss = self.loss(img, target)
+
+        self.log("train_loss", loss)
+        return loss
+
 
 if __name__ == '__main__':
     network = Yolo(1)
-    for name, _ in network.named_modules():
-        print(name)
-    network(torch.rand((1, 3, 256, 256)))
     print(network)

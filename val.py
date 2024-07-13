@@ -10,9 +10,8 @@ from rich.progress import track
 from sklearn import metrics
 
 from safe.FeatureExtract import FeatureExtract
-from safe.safe_method import MLP, peek_relative_feature_single_batch
+from safe.safe_method import MLP, peek_roi_single_batch
 from schedules.schedule import Config
-from yolo.non_max_suppression import non_max_suppression
 
 
 def box_iou(box1, box2):
@@ -207,8 +206,8 @@ def process_batch(detections, labels, iouv):
 
 
 @torch.no_grad()
-def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
-    device = next(network.parameters()).device
+def collect_stats(network: yolo.Network.Yolo, ood_evaluator: MLP, val_dataset: Dataset):
+    device = network.device
     dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True,
                             collate_fn=H5DatasetYolo.collate_fn)
 
@@ -236,9 +235,8 @@ def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dat
         # target = torch.from_numpy(target).to(device)
 
         feature_extractor.ready()
-        output = network(img)
-        output = network.detect.inference_post_process(output)
-        output = non_max_suppression(output)
+
+        output = network.inference(img)
 
         for i, batch_p in enumerate(output):
             predictions = batch_p.numpy(force=True)
@@ -269,7 +267,7 @@ def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dat
                 cls = predictions[:, 10]
 
                 # 计算ood_score
-                feature = peek_relative_feature_single_batch(feature_extractor.get_features(), batch_p, i)
+                feature = peek_roi_single_batch(feature_extractor.get_features(), batch_p, i)
                 ood_score = ood_evaluator(feature).numpy(force=True)
                 assert ood_score.shape[0] == npr
 
@@ -283,7 +281,7 @@ def collect_stats(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dat
     return stats
 
 
-def val(network: torch.nn.Module, ood_evaluator: MLP, val_dataset: Dataset):
+def val(network: yolo.Network.Yolo, ood_evaluator: MLP, val_dataset: Dataset):
     stats = collect_stats(network, ood_evaluator, val_dataset)
 
     if len(stats) and stats[0].any():

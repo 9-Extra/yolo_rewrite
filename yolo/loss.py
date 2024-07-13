@@ -84,14 +84,14 @@ class FocalLoss(nn.Module):
             return loss
 
 
-class ComputeLoss:
+class ComputeLoss(nn.Module):
     # Compute losses
-    def __init__(self, model):
+    def __init__(self, num_class: int, anchors: list, mapped_anchors: torch.Tensor):
         """Initializes ComputeLoss with model and autobalance option, autobalances losses if True."""
-        device = next(model.parameters()).device  # get model device
+        super().__init__()
         # Define criteria
-        BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0], device=device))
-        BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0], device=device))
+        BCEcls = nn.BCEWithLogitsLoss()
+        BCEobj = nn.BCEWithLogitsLoss()
 
         # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
         self.cp, self.cn = 1, 0  # positive, negative BCE targets
@@ -101,20 +101,20 @@ class ComputeLoss:
         if g > 0:
             BCEcls, BCEobj = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g)
 
-        m = model.detect  # Detect() module
+        self.nc = num_class
+        self.register_buffer("anchors", mapped_anchors)  # from detect module
+        self.nl = len(anchors)
+        self.na = len(anchors[0]) // 2
+
         self.balance = [4.0, 1.0, 0.4]  # 为不同大小的锚框赋予不同权重，较小的要求更加精确
         self.ssi = 0  # stride 16 index
         self.BCEcls, self.BCEobj, self.gr = BCEcls, BCEobj, 1.0
-        self.na = m.na  # number of anchors
-        self.nc = m.nc  # number of classes
-        self.nl = m.nl  # number of layers
-        self.anchors = m.anchors
-        self.device = device
 
-    def __call__(self, predictions, targets):  # predictions, targets
-        cls_loss = torch.zeros(1, device=self.device)  # class loss
-        box_loss = torch.zeros(1, device=self.device)  # box loss
-        conf_loss = torch.zeros(1, device=self.device)  # object loss
+    def forward(self, predictions: list[torch.Tensor], targets: torch.Tensor) -> torch.Tensor:  # predictions, targets
+        device = self.anchors.device
+        cls_loss = torch.zeros(1, device=device)  # class loss
+        box_loss = torch.zeros(1, device=device)  # box loss
+        conf_loss = torch.zeros(1, device=device)  # object loss
 
         indexed_target = self.build_targets(predictions, targets)  # targets
         # Losses
@@ -127,7 +127,7 @@ class ComputeLoss:
             # gj 包含此target的锚框y方向的索引
 
             # 初始化目标置信度，如果没有目标，所有位置的锚框置信度都为0
-            target_conf = torch.zeros(pi.shape[:4], dtype=pi.dtype, device=self.device)
+            target_conf = torch.zeros(pi.shape[:4], dtype=pi.dtype, device=device)
 
             if b.shape[0] != 0:  # 如果有目标
                 pxy, pwh, _, pcls = pi[b, a, gj, gi].tensor_split((2, 4, 5), dim=1)  # faster, requires torch 1.8.0
@@ -149,7 +149,7 @@ class ComputeLoss:
                 # Classification
                 if self.nc > 1:  # cls loss (only if multiple classes)
                     # self.cn, self.cp 是用于标签平滑的上下限
-                    t = torch.full_like(pcls, self.cn, device=self.device)  # targets
+                    t = torch.full_like(pcls, self.cn, device=device)  # targets
                     t[range(pcls.shape[0]), cls] = self.cp
                     cls_loss += self.BCEcls(pcls, t)  # BCE
 
@@ -170,17 +170,18 @@ class ComputeLoss:
         Prepares model targets from input targets (image,class,x,y,w,h) for loss computation, returning class, box,
         indices, and anchors.
         """
+        device = self.anchors.device
         na, nt = self.na, targets.shape[0]  # number of anchors, targets
         result = []
-        gain = torch.ones(7, device=self.device)  # normalized to gridspace gain
+        gain = torch.ones(7, device=device)  # normalized to gridspace gain
         # 生成与targets形状一致的anchor_index
-        ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
+        ai = torch.arange(na, device=device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
         # 将targets复制na次，再与anchor_index合并，这样每个anchor都有一个targets，并且可以通过anchor_index判断是哪一个anchor
         # targets最后的格式为target: (anchor数，目标数，7)，最后一维格式为(image ,class, x, y, w, h, anchor_index)
         targets = torch.cat((targets.repeat(na, 1, 1), ai[..., None]), -1)  # append anchor indices
 
         g = 0.5  # bias
-        off = (torch.tensor([[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1]], device=self.device, ).float() * g)  # offsets
+        off = (torch.tensor([[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1]], device=device).float() * g)  # offsets
 
         for i in range(self.nl):
             # 遍历每一层，获取该层的anchors和输出大小（也是特征图大小和输出bbox数）

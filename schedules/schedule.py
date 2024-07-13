@@ -29,18 +29,21 @@ class Config:
         from dataset.h5Dataset import H5DatasetYolo
         return H5DatasetYolo(self.file_train_dataset)
 
-    @property
-    def yolo_optimizer(self):
-        return torch.optim.Adam
-
     @cached_property
     def trained_yolo_network(self):
         import yolo
+        network = yolo.Network.Yolo.load_from_checkpoint(self.file_yolo_weight, num_class=self.num_class)
+        return network
+
+    @cached_property
+    def yolo_layer_order(self):
+        import yolo
         num_class = self.num_class
         network = yolo.Network.Yolo(num_class)
-        network.load_state_dict(torch.load(self.file_yolo_weight)["network"])
-
-        return network
+        name_order = []
+        for name, _ in network.named_modules():
+            name_order.append(name)
+        return name_order
 
     # mlp
     file_mlp_weight = "run/weight/mlp.pth"

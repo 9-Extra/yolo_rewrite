@@ -2,19 +2,6 @@ import torch
 from torch.utils.hooks import RemovableHandle
 
 
-class Strategy:
-    def filter(self, name: str, layer: torch.nn.Module) -> bool:
-        raise NotImplementedError
-
-    def get_name_set(self, network: torch.nn.Module):
-        names = set()
-        for name, layer in network.named_modules():
-            if self.filter(name, layer):
-                names.add(name)
-
-        return names
-
-
 class FeatureExtract:
     feature_cache: dict[str, torch.Tensor]
     hooks: dict[str, RemovableHandle]
