@@ -1,3 +1,4 @@
+import csv
 import os
 import re
 
@@ -7,14 +8,11 @@ import torchvision
 from rich.progress import track
 from sklearn import metrics
 
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
-import json
-
-import yolo
 from dataset.h5Dataset import H5DatasetYolo
 from safe.FeatureExtract import FeatureExtract
-from safe.safe_method import mlp_build_dataset_separate, MLP, train_mlp
+from safe.safe_method import MLP, train_mlp, ExtractFeatureDatabase
 from val import process_batch
 from yolo.Network import FeatureExporter, BackBone, Conv, FeatureConcat
 from yolo.non_max_suppression import non_max_suppression
@@ -23,7 +21,7 @@ from yolo.non_max_suppression import non_max_suppression
 class ExtractAll:
 
     def __init__(self):
-        self.pattern = re.compile("detect|bottlenecks")
+        self.pattern = re.compile("detect|bottlenecks|loss_func")
 
     def get_name_set(self, network: torch.nn.Module):
         names = set()
@@ -39,35 +37,7 @@ class ExtractAll:
                     FeatureExporter, FeatureConcat, BackBone, Conv, torch.nn.Identity, torch.nn.MaxPool2d)):
                 if name != "backbone.inner" and name != "":
                     return True
-
-
-def extract_features(network: yolo.Network.Yolo, dataset: Dataset, attack_method, epsilon: float, dir_name: str):
-    os.makedirs(dir_name, exist_ok=True)
-
-    feature_name_set = ExtractAll().get_name_set(network)
-    print(f"共提取{len(feature_name_set)}层的特征")
-
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
-                            collate_fn=H5DatasetYolo.collate_fn)
-
-    cache_dir = dir_name + "_cache"
-    mlp_build_dataset_separate(network, feature_name_set, dataloader, attack_method, cache_dir, epsilon)
-    for name in list(feature_name_set):
-        positive = []
-        negative = []
-        for block_dir in os.listdir(cache_dir):
-            x = torch.load(os.path.join(cache_dir, block_dir, name))
-            positive.append(x["pos"])
-            negative.append(x["neg"])
-
-        assert sum(p.shape[0] for p in positive) == sum(n.shape[0] for n in negative)  # 正负样本数相同
-
-        x = torch.cat((*positive, *negative))
-
-        feature_dim = x.shape[1]
-        print(f"导出：{name}, 样本数：{x.shape[0]}, 特征长度：{feature_dim}")
-
-        torch.save(x, os.path.join(dir_name, name))
+        return False
 
 
 class DetectedDataset:
@@ -209,33 +179,31 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: DetectedDataset):
     return auroc, fpr95
 
 
-def train_mlp_from_features_dir(feature_name_set: set, layer_order: list[str], train_features_dir: str,
-                                epoch: int,
-                                device: torch.device):
+def train_mlp_from_features(
+        feature_name_set: set,
+        layer_order: list[str],
+        feature_database: ExtractFeatureDatabase,
+        attacker_name: str,
+        epoch: int,
+        device: torch.device
+):
     assert len(feature_name_set) != 0, "搞啥呢"
-    if len(feature_name_set) > 1:
-        x = []  # 需要保证顺序network.named_modules的顺序一致
-        for name in layer_order:  # 这里只是利用feature_data中特征顺序与网络相同的特性
-            if name in feature_name_set:
-                fx = torch.load(os.path.join(train_features_dir, name))
-                x.append(fx)
 
-        assert len(x) == len(feature_name_set)  # 每个特征都找到了
-        x = torch.cat(x, dim=1).to(device, non_blocking=True)
-        y = torch.zeros(x.shape[0], device=device, dtype=torch.float32)
-        y[0:x.shape[0] // 2] = 1  # 前一半为正样本
-    else:
-        # shortcut 只有一个特征就不需要考虑顺序
-        for name in feature_name_set:
-            break  # 就是取第一个
-        x = torch.load(os.path.join(train_features_dir, name)).to(device, non_blocking=True)  # noqa
-        y = torch.zeros(x.shape[0], device=device, dtype=torch.float32)
-        y[0:x.shape[0] // 2] = 1  # 前一半为正样本
+    feature_name_list = []
+    for name in layer_order:
+        if name in feature_name_set:
+            feature_name_list.append(name)
 
-    feature_dim = x.shape[1]
-    print(f"使用特征层：{feature_name_set}\n特征长度：{feature_dim}")
+    neg, pos = feature_database.query_features(attacker_name, feature_name_list)
+    assert pos.shape == neg.shape
+
+    x = torch.cat((torch.from_numpy(pos).to(device, non_blocking=True), torch.from_numpy(neg).to(device, non_blocking=True)))
+    y = torch.zeros(x.shape[0], device=device, dtype=torch.float32)
+    y[0:x.shape[0] // 2] = 1  # 前一半为正样本
+    del pos, neg
 
     dataset = torch.utils.data.TensorDataset(x, y)
+    feature_dim = x.shape[1]
 
     mlp = MLP(feature_dim, feature_name_set)
     # mlp = torch.compile(mlp, backend="cudagraphs", fullgraph=True, disable=False)
@@ -246,7 +214,8 @@ def train_mlp_from_features_dir(feature_name_set: set, layer_order: list[str], t
 
 def search_single_layers(
         feature_data: DetectedDataset,
-        train_features_dir: str,
+        feature_database: ExtractFeatureDatabase,
+        attacker_name: str,
         summary_path: str,
         epoch: int,
         device: torch.device):
@@ -255,14 +224,15 @@ def search_single_layers(
     """
     results = []
     layer_order = list(feature_data.ood_features.keys())
-    for name in os.listdir(train_features_dir):
+    for layer_name in os.listdir(feature_database.h5[attacker_name].keys()):
         # train
-        mlp_network, mlp_acc = train_mlp_from_features_dir({name}, layer_order, train_features_dir, epoch, device)
+        mlp_network, mlp_acc = train_mlp_from_features({layer_name}, layer_order, feature_database, attacker_name,
+                                                       epoch, device)
         # val
         auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
 
         print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
-        results.append((name, auroc, fpr95))
+        results.append((layer_name, auroc, fpr95))
 
     os.makedirs(os.path.dirname(summary_path), exist_ok=True)
     with open(summary_path, "w") as f:
@@ -273,24 +243,27 @@ def search_single_layers(
 
 def search_multi_layers(name_set_list: list[set],
                         feature_data: DetectedDataset,
-                        train_features_dir: str,
+                        feature_database: ExtractFeatureDatabase,
+                        attacker_name: str,
                         summary_path: str,
                         epoch: int,
                         device: torch.device):
     """
     搜索指定的特征策略
     """
-    results = []
     layer_order = list(feature_data.ood_features.keys())
-    for name_set in name_set_list:
-        # train
-        mlp_network, mlp_acc = train_mlp_from_features_dir(name_set, layer_order, train_features_dir, epoch, device)
-        # val
-        auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
-
-        print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
-        results.append((list(name_set), auroc, fpr95))
 
     os.makedirs(os.path.dirname(summary_path), exist_ok=True)
-    json.dump(results, open(summary_path, "w"))
+    with open(summary_path, "w", newline='') as csvfile:
+        spamwriter = csv.writer(csvfile)
+        spamwriter.writerow(["name_set", "mlp_acc", "auroc", "fpr95"])
+        for name_set in name_set_list:
+            # train
+            mlp_network, mlp_acc = train_mlp_from_features(name_set, layer_order, feature_database, attacker_name,
+                                                           epoch,
+                                                           device)
+            # val
+            auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
 
+            print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
+            spamwriter.writerow([str(name_set), f"{mlp_acc:%}", auroc, fpr95])

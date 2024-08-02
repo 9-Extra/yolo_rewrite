@@ -1,5 +1,3 @@
-from typing import Any
-
 import torch
 from torch.nn import Module
 from collections import OrderedDict

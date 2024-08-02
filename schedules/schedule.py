@@ -32,7 +32,7 @@ class Config:
     @cached_property
     def trained_yolo_network(self):
         import yolo
-        network = yolo.Network.Yolo.load_from_checkpoint(self.file_yolo_weight, num_class=self.num_class)
+        network = yolo.Network.Yolo.load_from_checkpoint("run/weight/yolo_100.pth", num_class=self.num_class)
         return network
 
     @cached_property
@@ -47,7 +47,6 @@ class Config:
 
     # mlp
     file_mlp_weight = "run/weight/mlp.pth"
-    mlp_epsilon = 0.01
     mlp_epoch = 20
     file_detected_base_dataset = "run/preprocess/detected_base.h5"
     file_detected_dataset = "run/preprocess/detected_dataset.pth"
@@ -70,5 +69,13 @@ class Config:
         return search.DetectedDataset.load(self.file_detected_dataset)
 
     # extract_feature
-    dir_extract_features = "run/extract_features"
-    attack_method: AttackMethod = "fgsm"
+    # dir_extract_features = "run/extract_features"
+    # attack_method: AttackMethod = "fgsm"
+
+    # attack
+    h5_extract_features = "run/extract_features.h5"
+
+    @property
+    def extract_features_database(self):
+        from search import ExtractFeatureDatabase
+        return ExtractFeatureDatabase(self.h5_extract_features)

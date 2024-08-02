@@ -7,8 +7,9 @@ import numpy
 import tqdm
 
 from dataset.DroneDataset import DroneTestDataset
-from dataset.RawDataset import RawDataset, mix_raw_dataset
+from dataset.RawDataset import RawDataset, mix_raw_dataset, delete_all_object
 from dataset.BirdVSDroneBird import BirdVSDroneBird
+from dataset.CocoBird import CocoBird
 
 
 def letterbox_fixed_size(im, new_shape: tuple[int, int], color=(114, 114, 114), scaleup=False):
@@ -128,9 +129,14 @@ def main(dist: str, data: RawDataset):
 
 if __name__ == '__main__':
     drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
-    print("总图像数=", len(drone_test))
+    print("原测试集图像数=", len(drone_test))
+    main("preprocess/test_pure_drone.h5", drone_test)
+    coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
+    delete_all_object(coco_bird)
+    print("Coco中鸟图像数=", len(coco_bird))
+
+    main("preprocess/test_drone_with_coco.h5", mix_raw_dataset([drone_test, coco_bird]))
+
     bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
     print("鸟图像数=", len(bird))
-    mixed = mix_raw_dataset([drone_test, bird])
-    print("混合总图像数=", len(mixed))
-    main("preprocess/test_drone_with_bird.h5", mixed)
+    main("preprocess/test_drone_with_bird.h5", mix_raw_dataset([drone_test, bird]))

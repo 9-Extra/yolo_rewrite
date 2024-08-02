@@ -1,13 +1,19 @@
-import os
+import functools
+import time
 from collections import defaultdict
+from typing import Sequence
 
+import h5py
+import numpy
 import torch
 import torchvision
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from rich.progress import Progress, BarColumn, TaskProgressColumn, TextColumn, TimeRemainingColumn
 
 import yolo
+from dataset.h5Dataset import H5DatasetYolo
 from .FeatureExtract import FeatureExtract
+from .attack import Attacker
 
 
 class MLP(torch.nn.Module):
@@ -69,6 +75,34 @@ class MLP(torch.nn.Module):
         return mlp
 
 
+class ExtractFeatureDatabase:
+    h5: h5py.File
+
+    def __init__(self, path: str):
+        self.h5 = h5py.File(path)
+
+    @functools.cache
+    def count(self):
+        for attacker_name in self.h5.keys():
+            for feature in self.h5[attacker_name].keys():
+                return self.h5[attacker_name][feature].shape[0]
+        return 0
+
+    def attacker_names(self):
+        return self.h5.keys()
+
+    def query_features(self, attacker_name: str, layer_name_list: list):
+        assert len(layer_name_list) != 0
+        neg_ds = [self.h5[f"{attacker_name}/{layer_name}"] for layer_name in layer_name_list]
+        pos_ds = [self.h5[f"{attacker_name}/{layer_name}_pos"] for layer_name in layer_name_list]
+        count = neg_ds[0].shape[0]
+        assert all(d.shape[0] == count for d in pos_ds) and all(d.shape[0] == count for d in neg_ds)
+
+        neg = numpy.concatenate([d[()] for d in neg_ds], axis=1)
+        pos = numpy.concatenate([d[()] for d in neg_ds], axis=1)
+        return neg, pos
+
+
 def peek_relative_feature_batched(feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
     device = prediction[0].device
     # 遍历每一个batch的输出
@@ -110,9 +144,10 @@ def peek_roi_single_batch(feature_dict: dict[str, torch.Tensor], prediction: tor
 def peek_roi_to_dict(
         feature_dict: dict[str, torch.Tensor],
         prediction: list[torch.Tensor],
-        out_dict: defaultdict[str, list[torch.Tensor]]
 ):
     device = prediction[0].device
+
+    out_dict: defaultdict[str, list[torch.Tensor]] = defaultdict(list)
     # 遍历每一个batch的输出
     for batch_id, batch_p in enumerate(prediction):
         if batch_p.shape[0] == 0:
@@ -132,170 +167,93 @@ def peek_roi_to_dict(
             relative_feature = torchvision.ops.roi_align(feature, batch_bbox, (2, 2), w)
             out_dict[name].append(relative_feature.flatten(start_dim=1))  # 保留第0维
 
-
-# @torch.no_grad()
-# def mlp_build_dataset(network: yolo.Network.Yolo, name_set: set, train_loader: DataLoader,
-#                       attack_method: str, epsilon: float):
-#     device = network.device
-#
-#     network.eval()
-#     feature_extractor = FeatureExtract(name_set)
-#
-#     positive_features, negative_features = [], []
-#     with Progress(
-#             TextColumn("[progress.description]{task.description}"),
-#             BarColumn(),
-#             TaskProgressColumn(),
-#             TextColumn("{task.completed}/{task.total}"),
-#             TimeRemainingColumn(),
-#     ) as process:
-#         for img, target in process.track(train_loader, len(train_loader), description="收集特征"):
-#             img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
-#             target = torch.from_numpy(target).to(device, non_blocking=True)
-#
-#             if attack_method == "fgsm":
-#                 attack_sample = fsgm_attack(network, img, target, epsilon)
-#             elif attack_method == "pgd":
-#                 attack_sample = pdg_attack(network, img, target, epsilon, 5)
-#             else:
-#                 raise RuntimeError("未知对抗攻击方法")
-#
-#             feature_extractor.attach(network)
-#
-#             feature_extractor.ready()
-#             prediction = network.inference(img)
-#             positive_features.append(peek_relative_feature_batched(feature_extractor.get_features(), prediction))
-#
-#             feature_extractor.ready()
-#             _ = network(attack_sample)
-#             negative_features.append(peek_relative_feature_batched(feature_extractor.get_features(), prediction))
-#
-#             feature_extractor.detach()
-#
-#     # 构造MLP训练集
-#     positive_features = torch.cat(positive_features)
-#     negative_features = torch.cat(negative_features)
-#     y = torch.zeros(positive_features.shape[0] + negative_features.shape[0], dtype=torch.float32, device=device)
-#     y[:positive_features.shape[0]] = 1  # 正样本值为1
-#     x = torch.cat([positive_features, negative_features])
-#
-#     assert x.shape[0] == y.shape[0]
-#
-#     return x, y
+        return out_dict
 
 
-@torch.enable_grad()
-def fsgm_attack(model: yolo.Network.Yolo, x: torch.Tensor, y: torch.Tensor, epsilon: float):
-    x.detach_().requires_grad_()  # 与之前的计算过程分离，为计算梯度做准备
+class _FeatureSaver:
+    h5_dataset_dict: dict[str, h5py.Dataset] # cache
+    h5_database: h5py.File
+    positive_group_name: str
 
-    loss = model.loss(x, y)  # 计算损失
-    grad = torch.autograd.grad(loss, x)[0]
+    def __init__(self, h5_database: h5py.File, positive_group_name: str):
+        self.h5_database = h5_database
+        self.positive_group_name = positive_group_name
+        self.h5_dataset_dict = {}
 
-    with torch.no_grad():
-        attack = x + epsilon * torch.sign(grad)
-        attack.clip_(0, 1)
+    def save_features_h5(self, group_name: str, feature_dict: dict):
+        for layer_name, feature in feature_dict.items():
+            if len(feature) == 0:
+                continue
+            assert len(feature[0].shape) == 2
 
-    return attack
+            name = f"{group_name}/{layer_name}"
+            if name not in self.h5_dataset_dict:
+                if name in self.h5_database:
+                    del self.h5_database[name]
 
+                dim = feature[0].shape[-1]
+                h5 = self.h5_database.create_dataset(name, (0, dim), chunks=(32, dim), dtype="f4",
+                                                maxshape=(None, dim))
+                self.h5_dataset_dict[name] = h5
+                # 创建到对应正样本的硬连接
+                self.h5_database[f"{name}_pos"] = self.h5_dataset_dict[f"{self.positive_group_name}/{layer_name}"]
 
-@torch.enable_grad()
-def pdg_attack(model: yolo.Network.Yolo, x: torch.Tensor, y: torch.Tensor, epsilon: float, epoch: int = 20):
-    attack = x.clone()  # + torch.zeros_like(x).uniform_(-epsilon, epsilon)  # 初始化时添加随机噪声，效果更好
-
-    alpha = epsilon / epoch * 3
-    for i in range(epoch):
-        attack.detach_().requires_grad_()  # 与之前的计算过程分离，为计算梯度做准备
-
-        loss = model.loss(attack, y)  # 计算损失
-        grad = torch.autograd.grad(loss, attack)[0]
-
-        with torch.no_grad():
-            attack += alpha * torch.sign(grad)  # 和FSGM的过程相同
-            attack = (attack - x).clip(-epsilon, epsilon) + x  # 限制变化范围(-epsilon, epsilon)
-            attack.clip_(0, 1)
-
-    return attack.detach_()
-
-
-def _save_extract_feature_block(positive_features: dict, negative_features: dict, block_dir: str):
-    os.makedirs(block_dir, exist_ok=True)
-
-    for name in list(positive_features.keys()):
-        positive = positive_features.pop(name)  # save memory
-        negative = negative_features.pop(name)
-        assert sum(p.shape[0] for p in positive) == sum(n.shape[0] for n in negative)  # 正负样本数相同
-
-        pos = torch.cat(positive)
-        neg = torch.cat(negative)
-
-        torch.save({
-            "pos": pos,
-            "neg": neg
-        }, os.path.join(block_dir, name))
-
-    assert len(positive_features) == len(negative_features) and len(negative_features) == 0
-
-
-@torch.no_grad()
-def mlp_build_dataset_separate(network: yolo.Network.Yolo,
-                               name_set: set,
-                               train_loader: DataLoader,
-                               attack_method: str,
-                               dir_name: str,
-                               epsilon: float
-                               ):
-    device = next(network.parameters()).device
-    network.eval()
-
-    block_size = 128
-
-    feature_extractor = FeatureExtract(name_set)
-
-    positive_features, negative_features = defaultdict(list), defaultdict(list)
-    with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeRemainingColumn(),
-    ) as process:
-        for i, (img, target) in enumerate(process.track(train_loader, len(train_loader), description="收集特征")):
-            img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
-            target = torch.from_numpy(target).to(device, non_blocking=True)
-
-            if attack_method == "fgsm":
-                attack_sample = fsgm_attack(network, img, target, epsilon)
-            elif attack_method == "pgd":
-                attack_sample = pdg_attack(network, img, target, epsilon, 5)
             else:
-                raise RuntimeError("未知对抗攻击方法")
+                h5 = self.h5_dataset_dict[name]
 
-            feature_extractor.attach(network)
+            current_idx = h5.shape[0]
+            f = torch.cat(feature).numpy(force=True)
+            feature.clear()
+            h5.resize(current_idx + f.shape[0], 0)
+            h5.write_direct(f, dest_sel=slice(current_idx, current_idx + f.shape[0]))
 
-            # 正常目标特征
-            feature_extractor.ready()
-            prediction = network.inference(img)
-            peek_roi_to_dict(feature_extractor.get_features(), prediction, out_dict=positive_features)
 
-            # 对抗攻击目标特征
-            feature_extractor.ready()
-            _ = network(attack_sample)  # 不需要结果
-            peek_roi_to_dict(feature_extractor.get_features(), prediction, out_dict=negative_features)
+def extract_features_h5(network: yolo.Network.Yolo,
+                        feature_name_set: set,
+                        dataset: Dataset,
+                        attackers: Sequence[Attacker],
+                        h5_file_name: str):
+    with h5py.File(h5_file_name, "a") as h5_database:
+        train_loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
+                                  collate_fn=H5DatasetYolo.collate_fn)
 
-            feature_extractor.detach()  # 在进行对抗攻击时不记录特征
+        device = next(network.parameters()).device
+        network.eval()
+        positive_group_name = f"positive_{time.strftime('%Y.%m.%d-%H:%M:%S')}"
 
-            if (i + 1) % block_size == 0:  # 拼接成块
-                block = i // block_size
-                block_dir = os.path.join(dir_name, str(block))
-                _save_extract_feature_block(positive_features, negative_features, block_dir)
+        feature_extractor = FeatureExtract(feature_name_set)
 
-        # 保存剩下的
-        if len(positive_features) != 0:
-            block = i // block_size + 1
-            block_dir = os.path.join(dir_name, str(block))
-            _save_extract_feature_block(positive_features, negative_features, block_dir)
+        saver = _FeatureSaver(h5_database, positive_group_name)
 
-    feature_extractor.detach()
+        with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TextColumn("{task.completed}/{task.total}"),
+                TimeRemainingColumn(),
+        ) as process:
+            for i, (img, target) in enumerate(process.track(train_loader, len(train_loader), description="收集特征")):
+                img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
+                target = torch.from_numpy(target).to(device, non_blocking=True)
+
+                attack_samples = [attacker(network, img, target) for attacker in attackers]
+
+                feature_extractor.attach(network)
+                # 正样本
+                feature_extractor.ready()
+                prediction = network.inference(img)
+                feature_dict = peek_roi_to_dict(feature_extractor.get_features(), prediction)
+                saver.save_features_h5(positive_group_name, feature_dict)
+
+                # 对抗攻击目标特征
+                for sample, attacker in zip(attack_samples, attackers):
+                    feature_extractor.ready()
+                    _ = network(sample)  # 不需要结果
+                    feature_dict = peek_roi_to_dict(feature_extractor.get_features(), prediction)
+                    saver.save_features_h5(attacker.name, feature_dict)
+
+                feature_extractor.detach()  # 在进行对抗攻击时不记录特征
+    pass
 
 
 def train_mlp(mlp: MLP, train_dataset, batch_size: int, epoch: int, device: torch.device):

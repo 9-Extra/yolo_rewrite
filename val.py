@@ -1,3 +1,5 @@
+from typing import Sequence
+
 import cv2
 import numpy
 
@@ -300,28 +302,30 @@ def val(network: yolo.Network.Yolo, ood_evaluator: MLP, val_dataset: Dataset):
     pass
 
 
-def main(network: yolo.Network.Yolo, data_path: str):
+def main(config: Config, data_paths: Sequence[str]):
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
-    print(f"正在使用数据集{data_path}验证网络")
+    network = config.trained_yolo_network
+    mlp = MLP.from_static_dict(torch.load(config.file_mlp_weight))
 
-    ood_evaluator = MLP.from_static_dict(torch.load("mlp.pth"))
-    ood_evaluator.to(device, non_blocking=True)
+    mlp.eval().to(device, non_blocking=True)
     network.eval().to(device, non_blocking=True)
-    print("提取特征层：", ood_evaluator.feature_name_set)
+    print("提取特征层：", mlp.feature_name_set)
 
-    dataset = H5DatasetYolo(data_path)
-
-    val(network, ood_evaluator, dataset)
+    for path in data_paths:
+        print(f"正在使用数据集{path}验证网络")
+        dataset = H5DatasetYolo(path)
+        val(network, mlp, dataset)
 
     pass
 
 
 if __name__ == '__main__':
     config = Config()
-    # main("weight/yolo_final_full.pth", "preprocess/pure_drone_full_val.h5")
-    main(config.trained_yolo_network, "preprocess/test_pure_drone.h5")
-    main(config.trained_yolo_network, "preprocess/test_drone_with_bird.h5")
-    main(config.trained_yolo_network, "preprocess/test_drone_with_coco.h5")
-    # main("weight/yolo_drone_with_bird.pth", "preprocess/drone_val")
+    data_paths = [
+        "preprocess/test_pure_drone.h5",
+        "preprocess/test_drone_with_bird.h5",
+        "preprocess/test_drone_with_coco.h5"
+    ]
+    main(config, data_paths)
