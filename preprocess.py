@@ -87,15 +87,12 @@ def process_data(origin_img: str, objs: list, target_size: tuple[int, int]):
         mapped_objs[i] = [obj[0], x, y, width, height]
 
     cv2.cvtColor(img, cv2.COLOR_BGR2HSV_FULL, img)
-    # cv2.cvtColor(img, cv2.COLOR_HSV2BGR_FULL, img)
-    # cv2.imshow("show", img)
-    # cv2.waitKey()
     img = img.transpose(2, 0, 1)
 
     return img, mapped_objs
 
 
-def main(dist: str, data: RawDataset):
+def raw_dataset2h5(dist: str, data: RawDataset):
     os.makedirs(os.path.dirname(dist), exist_ok=True)
     target_size = [640, 640]
 
@@ -130,13 +127,13 @@ def main(dist: str, data: RawDataset):
 if __name__ == '__main__':
     drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
     print("原测试集图像数=", len(drone_test))
-    main("preprocess/test_pure_drone.h5", drone_test)
+    raw_dataset2h5("preprocess/pure_drone_train_full.h5", drone_test)
     coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
     delete_all_object(coco_bird)
     print("Coco中鸟图像数=", len(coco_bird))
 
-    main("preprocess/test_drone_with_coco.h5", mix_raw_dataset([drone_test, coco_bird]))
+    raw_dataset2h5("preprocess/test_drone_with_coco.h5", mix_raw_dataset([drone_test, coco_bird]))
 
     bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
     print("鸟图像数=", len(bird))
-    main("preprocess/test_drone_with_bird.h5", mix_raw_dataset([drone_test, bird]))
+    raw_dataset2h5("preprocess/test_drone_with_bird.h5", mix_raw_dataset([drone_test, bird]))

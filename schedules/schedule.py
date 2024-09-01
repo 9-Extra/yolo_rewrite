@@ -33,6 +33,7 @@ class Config:
     def trained_yolo_network(self):
         import yolo
         network = yolo.Network.Yolo.load_from_checkpoint("run/weight/yolo_100.pth", num_class=self.num_class)
+        # network = torch.compile(network)
         return network
 
     @cached_property
@@ -46,7 +47,6 @@ class Config:
         return name_order
 
     # mlp
-    file_mlp_weight = "run/weight/mlp.pth"
     mlp_epoch = 20
     file_detected_base_dataset = "run/preprocess/detected_base.h5"
     file_detected_dataset = "run/preprocess/detected_dataset.pth"

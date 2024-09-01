@@ -224,7 +224,7 @@ def search_single_layers(
     """
     results = []
     layer_order = list(feature_data.ood_features.keys())
-    for layer_name in os.listdir(feature_database.h5[attacker_name].keys()):
+    for layer_name in layer_order:
         # train
         mlp_network, mlp_acc = train_mlp_from_features({layer_name}, layer_order, feature_database, attacker_name,
                                                        epoch, device)

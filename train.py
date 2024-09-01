@@ -1,6 +1,7 @@
 import pytorch_lightning
 from pytorch_lightning.callbacks import ModelCheckpoint, RichModelSummary, RichProgressBar
 
+import search
 import yolo
 from schedules.schedule import Config
 import torch
@@ -54,7 +55,6 @@ def main(config: Config):
     trainer.fit(model=network, train_dataloaders=dataloader)
 
     trainer.save_checkpoint(config.file_yolo_weight, weights_only=True)
-
 
 pass
 

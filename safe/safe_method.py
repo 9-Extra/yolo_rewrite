@@ -43,23 +43,6 @@ class MLP(torch.nn.Module):
         else:
             return torch.sigmoid_(self.inner(x))
 
-    def score(self, feature_dict: dict[str, torch.Tensor], prediction: list[torch.Tensor]):
-        score_list = []
-        self.eval()
-        feature = peek_relative_feature_batched(feature_dict, prediction)
-        if feature.shape[0] == 0:
-            return []
-        score = self(feature).numpy(force=True)
-        # rebuild list
-        start = 0
-        for p in prediction:
-            score_list.append(score[start:p.shape[0]])
-            start += p.shape[0]
-
-        assert start == score.shape[0]
-
-        return score_list
-
     def to_static_dict(self):
         return {
             "in_dim": self.in_dim,
@@ -99,7 +82,7 @@ class ExtractFeatureDatabase:
         assert all(d.shape[0] == count for d in pos_ds) and all(d.shape[0] == count for d in neg_ds)
 
         neg = numpy.concatenate([d[()] for d in neg_ds], axis=1)
-        pos = numpy.concatenate([d[()] for d in neg_ds], axis=1)
+        pos = numpy.concatenate([d[()] for d in pos_ds], axis=1)
         return neg, pos
 
 
@@ -120,7 +103,6 @@ def peek_roi_single_batch(feature_dict: dict[str, torch.Tensor], prediction: tor
     if prediction.shape[0] == 0:
         return torch.empty(0, device=device)
 
-    # origin_bbox = batch_p[..., 0: 4]
     origin_bbox = prediction[..., 5: 9]
 
     batch_bbox = torch.empty([prediction.shape[0], 5], dtype=torch.float32, device=device)
@@ -151,10 +133,8 @@ def peek_roi_to_dict(
     # 遍历每一个batch的输出
     for batch_id, batch_p in enumerate(prediction):
         if batch_p.shape[0] == 0:
-            # result.append(torch.empty(0, device=device))
             continue
 
-        # origin_bbox = batch_p[..., 0: 4]
         origin_bbox = batch_p[..., 5: 9]
 
         batch_bbox = torch.empty([batch_p.shape[0], 5], dtype=torch.float32, device=device)
@@ -180,6 +160,27 @@ class _FeatureSaver:
         self.positive_group_name = positive_group_name
         self.h5_dataset_dict = {}
 
+    def is_completed(self, group_name: str, layer_name_set: set[str]):
+        if group_name not in self.h5_database:
+            return False
+
+        group: h5py.Group = self.h5_database[group_name]
+        if "incomplete" in group.attrs:
+            return False
+
+        return set(group.keys()).issuperset(layer_name_set)
+
+    def clear_incomplete(self, group_names: Sequence[str], layer_name_set: set[str]):
+        for group_name in group_names:
+            if not self.is_completed(group_name, layer_name_set):
+                self.delete_group(group_name)
+
+    def delete_group(self, group_name: str):
+        if group_name not in self.h5_database:
+            return
+        del self.h5_database[group_name]
+
+
     def save_features_h5(self, group_name: str, feature_dict: dict):
         for layer_name, feature in feature_dict.items():
             if len(feature) == 0:
@@ -187,6 +188,7 @@ class _FeatureSaver:
             assert len(feature[0].shape) == 2
 
             name = f"{group_name}/{layer_name}"
+            # 不存在或者不完整就重新创建数据集，否则从缓存self.h5_dataset_dict中取
             if name not in self.h5_dataset_dict:
                 if name in self.h5_database:
                     del self.h5_database[name]
@@ -194,9 +196,13 @@ class _FeatureSaver:
                 dim = feature[0].shape[-1]
                 h5 = self.h5_database.create_dataset(name, (0, dim), chunks=(32, dim), dtype="f4",
                                                 maxshape=(None, dim))
+                self.h5_database[group_name].attrs["incomplete"] = "True"
                 self.h5_dataset_dict[name] = h5
                 # 创建到对应正样本的硬连接
-                self.h5_database[f"{name}_pos"] = self.h5_dataset_dict[f"{self.positive_group_name}/{layer_name}"]
+                link_name = f"{name}_pos"
+                if link_name in self.h5_database:
+                    del self.h5_database[link_name]
+                self.h5_database[link_name] = self.h5_dataset_dict[f"{self.positive_group_name}/{layer_name}"]
 
             else:
                 h5 = self.h5_dataset_dict[name]
@@ -207,6 +213,15 @@ class _FeatureSaver:
             h5.resize(current_idx + f.shape[0], 0)
             h5.write_direct(f, dest_sel=slice(current_idx, current_idx + f.shape[0]))
 
+    def complete(self):
+        for name in self.h5_dataset_dict.keys():
+            group_name = name.split('/')[0]
+            g: h5py.Group = self.h5_database[group_name]
+            if "incomplete" in g.attrs:
+                del g.attrs["incomplete"]
+
+        self.h5_dataset_dict.clear()
+
 
 def extract_features_h5(network: yolo.Network.Yolo,
                         feature_name_set: set,
@@ -214,16 +229,33 @@ def extract_features_h5(network: yolo.Network.Yolo,
                         attackers: Sequence[Attacker],
                         h5_file_name: str):
     with h5py.File(h5_file_name, "a") as h5_database:
+
+        positive_group_name = f"positive_{time.strftime('%Y.%m.%d-%H:%M:%S')}"
+        saver = _FeatureSaver(h5_database, positive_group_name)
+        new_attackers = []
+        for attacker in attackers:
+            c = saver.is_completed(attacker.name, feature_name_set)
+            print(f"数据集{attacker.name}" + ("完整" if c else "缺失"))
+            if not c:
+                saver.delete_group(attacker.name)
+                new_attackers.append(attacker)
+
+        if len(new_attackers) == 0:
+            print("所有特征已缓存，跳过")
+            return
+
+        attackers = new_attackers
+        print(f"正在生成{len(attackers)}组特征：", [attacker.name for attacker in attackers])
+
+
         train_loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
                                   collate_fn=H5DatasetYolo.collate_fn)
 
         device = next(network.parameters()).device
         network.eval()
-        positive_group_name = f"positive_{time.strftime('%Y.%m.%d-%H:%M:%S')}"
 
         feature_extractor = FeatureExtract(feature_name_set)
 
-        saver = _FeatureSaver(h5_database, positive_group_name)
 
         with Progress(
                 TextColumn("[progress.description]{task.description}"),
@@ -253,6 +285,10 @@ def extract_features_h5(network: yolo.Network.Yolo,
                     saver.save_features_h5(attacker.name, feature_dict)
 
                 feature_extractor.detach()  # 在进行对抗攻击时不记录特征
+            pass
+
+        saver.complete()
+
     pass
 
 
