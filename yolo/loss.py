@@ -142,9 +142,8 @@ class ComputeLoss(nn.Module):
                 box_loss += (1.0 - iou).mean()  # iou loss
 
                 iou = iou.detach().clamp(0)
-                # 在此填写置信度的拟合目标
                 # 绝大多数的值都为0，只有索引指定的部分锚框的置信度才不是0
-                target_conf[b, a, gj, gi] = iou  # iou ratio
+                target_conf[b, a, gj, gi] = iou  # 置信度的拟合目标就是刚刚计算的交并比
 
                 # Classification
                 if self.nc > 1:  # cls loss (only if multiple classes)

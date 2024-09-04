@@ -1,7 +1,6 @@
 import pytorch_lightning
 from pytorch_lightning.callbacks import ModelCheckpoint, RichModelSummary, RichProgressBar
 
-import search
 import yolo
 from schedules.schedule import Config
 import torch

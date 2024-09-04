@@ -15,7 +15,7 @@ class Config:
     # yolo
     num_class = 1
     dir_checkpoint = "run/weight"
-    file_train_dataset = "run/preprocess/pure_drone_train_full.h5"
+    file_train_dataset = "run/preprocess/drone_test.h5"
     file_yolo_weight = "run/weight/yolo.pth"
     yolo_epoch = 100
 
@@ -36,32 +36,12 @@ class Config:
         # network = torch.compile(network)
         return network
 
-    @cached_property
-    def yolo_layer_order(self):
-        import yolo
-        num_class = self.num_class
-        network = yolo.Network.Yolo(num_class)
-        name_order = []
-        for name, _ in network.named_modules():
-            name_order.append(name)
-        return name_order
 
     # mlp
     mlp_epoch = 20
     file_detected_base_dataset = "run/preprocess/detected_base.h5"
     file_detected_dataset = "run/preprocess/detected_dataset.pth"
-    file_single_layer_search_summary = "run/summary/single_layer_search.csv"
     file_multi_layer_search_summary = "run/summary/multi_layer_search.json"
-
-    @cached_property
-    def raw_detected_base_dataset(self):
-        from dataset.DroneDataset import DroneDataset
-        from dataset.CocoBird import CocoBird
-        from dataset.RawDataset import mix_raw_dataset, delete_all_object
-        drone_val = DroneDataset(r"G:\datasets\DroneTrainDataset", split="val")
-        coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
-        delete_all_object(coco_bird)
-        return mix_raw_dataset([drone_val, coco_bird])
 
     @cached_property
     def detected_result_dataset(self):

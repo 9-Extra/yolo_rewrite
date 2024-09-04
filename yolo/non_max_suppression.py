@@ -2,7 +2,15 @@ import torch
 import torchvision
 
 
-def non_max_suppression(batch_prediction: torch.Tensor, conf_threshold=0.25, iou_threshold=0.45):
+def non_max_suppression(
+        batch_prediction: torch.Tensor,
+        conf_threshold=0.25,
+        iou_threshold=0.45
+) -> list[torch.Tensor]:
+    """
+    非极大值抑制
+    :return: 因为batch中每张图像包含的检测结果数不同，使用list放置每张图的结果
+    """
     # [x y w h conf origin_bbox cls]
 
     num_classes = batch_prediction.shape[-1] - 10

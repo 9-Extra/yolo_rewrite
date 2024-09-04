@@ -96,8 +96,6 @@ def run_target(target: TargetFunction):
             print(f"Running Target: {target.name}")
             func()
             _context.on_target_complete(target)
-        else:
-            print(f"Completed Target: {target.name}, Skip!")
 
 
 def re_run_target(target: TargetFunction):
@@ -111,8 +109,6 @@ def re_run_target(target: TargetFunction):
             print(f"Running Target: {target_info.name}")
             func()
             _context.on_target_complete(target_info)
-        else:
-            print(f"Completed Target: {target_info.name}, Skip!")
 
 
 def virtual_run_target(target: TargetFunction):

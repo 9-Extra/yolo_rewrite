@@ -1,6 +1,6 @@
 import torch
 
-import yolo
+from yolo.Network import Yolo
 import functools
 
 
@@ -10,7 +10,7 @@ class Attacker:
     def name(self):
         raise NotImplementedError
 
-    def __call__(self, model: yolo.Network.Yolo, x: torch.Tensor, y: torch.Tensor):
+    def __call__(self, model: Yolo, x: torch.Tensor, y: torch.Tensor):
         raise NotImplementedError
 
 
@@ -23,7 +23,7 @@ class FSGMAttack(Attacker):
         return f"fsgm_epsilon{self.epsilon}"
 
     @torch.enable_grad()
-    def __call__(self, model: yolo.Network.Yolo, x: torch.Tensor, y: torch.Tensor):
+    def __call__(self, model: Yolo, x: torch.Tensor, y: torch.Tensor):
         x.detach_().requires_grad_()  # 与之前的计算过程分离，为计算梯度做准备
 
         loss = model.loss(x, y)  # 计算损失
@@ -46,7 +46,7 @@ class PDGAttack(Attacker):
         return f"pdg_epsilon{self.epsilon}_limit{self.epoch}"
 
     @torch.enable_grad()
-    def __call__(self, model: yolo.Network.Yolo, x: torch.Tensor, y: torch.Tensor):
+    def __call__(self, model: Yolo, x: torch.Tensor, y: torch.Tensor):
         attack = x.clone()  # + torch.zeros_like(x).uniform_(-epsilon, epsilon)  # 初始化时添加随机噪声，效果更好
 
         alpha = self.epsilon / self.epoch * 3

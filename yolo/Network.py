@@ -1,3 +1,5 @@
+import functools
+
 import torch
 from torch.nn import Module
 from collections import OrderedDict
@@ -291,6 +293,13 @@ class Yolo(pytorch_lightning.LightningModule):
 
     def loss(self, x: torch.Tensor, y: torch.Tensor):
         return self.loss_func(self(x), y)
+
+    @functools.cached_property
+    def layer_order(self):
+        name_order = []
+        for name, _ in self.named_modules():
+            name_order.append(name)
+        return name_order
 
     @torch.inference_mode()
     def inference(self, x):

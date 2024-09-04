@@ -12,8 +12,9 @@ from torch.utils.data import DataLoader
 
 from dataset.h5Dataset import H5DatasetYolo
 from safe.FeatureExtract import FeatureExtract
-from safe.safe_method import MLP, train_mlp, ExtractFeatureDatabase
-from val import process_batch
+from safe.safe_method import ExtractFeatureDatabase
+from safe.mlp import MLP, train_mlp
+from yolo.validation import process_batch
 from yolo.Network import FeatureExporter, BackBone, Conv, FeatureConcat
 from yolo.non_max_suppression import non_max_suppression
 
@@ -81,7 +82,7 @@ def collect_stats(network: torch.nn.Module, val_dataset: H5DatasetYolo):
     stats = []
     ood_feature_collect = {}
 
-    for i, (img, target) in enumerate(track(dataloader)):
+    for img, target in track(dataloader):
         img_h, img_w = img.shape[2:]  # type: ignore
 
         img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
@@ -155,7 +156,7 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: DetectedDataset):
     # 需要保证feature_dict中顺序与network.named_modules的顺序一致
     # feature_dict为每一层已经经过roi_align的特征，包含 样本数 个batch
     collected = []
-    name_set = mlp.feature_name_set
+    name_set = mlp.layer_name_list
     for name in feature_data.ood_features.keys():
         if name in name_set:
             collected.append(feature_data.ood_features[name])
@@ -180,24 +181,17 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: DetectedDataset):
 
 
 def train_mlp_from_features(
-        feature_name_set: set,
-        layer_order: list[str],
+        layer_name_list: list[str],
         feature_database: ExtractFeatureDatabase,
         attacker_name: str,
         epoch: int,
         device: torch.device
 ):
-    assert len(feature_name_set) != 0, "搞啥呢"
+    assert len(layer_name_list) != 0, "搞啥呢"
 
-    feature_name_list = []
-    for name in layer_order:
-        if name in feature_name_set:
-            feature_name_list.append(name)
+    neg, pos = feature_database.query_features(attacker_name, layer_name_list)
 
-    neg, pos = feature_database.query_features(attacker_name, feature_name_list)
-    assert pos.shape == neg.shape
-
-    x = torch.cat((torch.from_numpy(pos).to(device, non_blocking=True), torch.from_numpy(neg).to(device, non_blocking=True)))
+    x = torch.from_numpy(numpy.concatenate((pos, neg))).to(device, non_blocking=True)
     y = torch.zeros(x.shape[0], device=device, dtype=torch.float32)
     y[0:x.shape[0] // 2] = 1  # 前一半为正样本
     del pos, neg
@@ -205,7 +199,7 @@ def train_mlp_from_features(
     dataset = torch.utils.data.TensorDataset(x, y)
     feature_dim = x.shape[1]
 
-    mlp = MLP(feature_dim, feature_name_set)
+    mlp = MLP(feature_dim, layer_name_list)
     # mlp = torch.compile(mlp, backend="cudagraphs", fullgraph=True, disable=False)
     mlp_acc = train_mlp(mlp, dataset, 64, epoch, device)
 
@@ -223,11 +217,14 @@ def search_single_layers(
     搜索所有的单层
     """
     results = []
-    layer_order = list(feature_data.ood_features.keys())
-    for layer_name in layer_order:
+    for layer_name in feature_data.ood_features.keys():
         # train
-        mlp_network, mlp_acc = train_mlp_from_features({layer_name}, layer_order, feature_database, attacker_name,
-                                                       epoch, device)
+        mlp_network, mlp_acc = train_mlp_from_features(
+            [layer_name],
+            feature_database,
+            attacker_name,
+            epoch, device
+        )
         # val
         auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
 
@@ -259,9 +256,18 @@ def search_multi_layers(name_set_list: list[set],
         spamwriter.writerow(["name_set", "mlp_acc", "auroc", "fpr95"])
         for name_set in name_set_list:
             # train
-            mlp_network, mlp_acc = train_mlp_from_features(name_set, layer_order, feature_database, attacker_name,
-                                                           epoch,
-                                                           device)
+            name_list = []
+            for layer in layer_order:
+                if layer in name_set:
+                    name_list.append(layer)
+
+            mlp_network, mlp_acc = train_mlp_from_features(
+                name_list,
+                feature_database,
+                attacker_name,
+                epoch,
+                device
+            )
             # val
             auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
 

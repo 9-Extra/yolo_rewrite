@@ -7,7 +7,7 @@ import cv2
 
 from dataset.DroneDataset import DroneTestDataset
 from dataset.RawDataset import RawDataset
-from safe.safe_method import MLP
+from safe.mlp import MLP
 from safe.FeatureExtract import FeatureExtract
 from schedules.schedule import Config
 from yolo.non_max_suppression import non_max_suppression

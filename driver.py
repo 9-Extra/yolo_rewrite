@@ -1,8 +1,9 @@
+import os.path
 import sys
 
 import safe
 from dataset.h5Dataset import H5DatasetYolo
-from safe.attack import FSGMAttack, PDGAttack, Attacker
+from safe.attack import FSGMAttack, PDGAttack
 from scheduler import Target
 from schedules.schedule import Config
 import preprocess
@@ -20,12 +21,22 @@ def target_preprocess_train_dataset():
 
 @Target(target_preprocess_train_dataset)
 def target_train():
+    if os.path.isfile(config.file_yolo_weight):
+        return # skip
+
     train.main(config)
 
 
 @Target()
 def target_preprocess_result_val_dataset():
-    preprocess.raw_dataset2h5(config.file_detected_base_dataset, config.raw_detected_base_dataset)
+    from dataset.DroneDataset import DroneDataset
+    from dataset.CocoBird import CocoBird
+    from dataset.RawDataset import mix_raw_dataset, delete_all_object
+    drone_val = DroneDataset(r"G:\datasets\DroneTrainDataset", split="val")
+    coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
+    delete_all_object(coco_bird)
+    raw_detected_base_dataset = mix_raw_dataset([drone_val, coco_bird])
+    preprocess.raw_dataset2h5(config.file_detected_base_dataset, raw_detected_base_dataset)
 
 
 @Target(target_train, target_preprocess_result_val_dataset)
@@ -64,7 +75,7 @@ def target_search_layer():
         search.search_single_layers(config.detected_result_dataset,
                                     config.extract_features_database,
                                     attacker.name,
-                                    config.file_single_layer_search_summary,
+                                    f"run/summary/single_layer_search_{attacker.name}.csv",
                                     15,
                                     config.device)
 
@@ -72,18 +83,25 @@ def target_search_layer():
 @Target(target_collect_result)
 def search_combine_layer():
     print("尝试策略")
+
+    attackers = [FSGMAttack(e) for e in (0.05, 0.06, 0.07, 0.08, 0.09, 0.1)]
+
     name_set_list = [*[{"backbone.inner.25"} for _ in range(3)],
                      *[{"backbone.inner.25", "backbone.inner.21"} for _ in range(3)],
                      *[{"backbone.inner.25", "backbone.inner.21", "backbone.inner.23.norm"} for _
                        in range(3)],
                      ]
-    search.search_multi_layers(name_set_list,
-                               config.detected_result_dataset,
-                               config.extract_features_database,
-                               "attacker",
-                               config.file_multi_layer_search_summary,
-                               15,
-                               config.device)
+
+    for attacker in attackers:
+        search.search_multi_layers(
+            name_set_list,
+            config.detected_result_dataset,
+            config.extract_features_database,
+            attacker.name,
+            f"run/summary/multi_layer_search_{attacker.name}.csv",
+            15,
+            config.device
+        )
 
 
 @Target(target_collect_result)

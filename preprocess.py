@@ -93,6 +93,8 @@ def process_data(origin_img: str, objs: list, target_size: tuple[int, int]):
 
 
 def raw_dataset2h5(dist: str, data: RawDataset):
+    if os.path.isfile(dist):
+        return
     os.makedirs(os.path.dirname(dist), exist_ok=True)
     target_size = [640, 640]
 
@@ -127,7 +129,7 @@ def raw_dataset2h5(dist: str, data: RawDataset):
 if __name__ == '__main__':
     drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
     print("原测试集图像数=", len(drone_test))
-    raw_dataset2h5("preprocess/pure_drone_train_full.h5", drone_test)
+    raw_dataset2h5("preprocess/drone_test.h5", drone_test)
     coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
     delete_all_object(coco_bird)
     print("Coco中鸟图像数=", len(coco_bird))
