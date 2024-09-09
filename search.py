@@ -63,12 +63,12 @@ class DetectedDataset:
 
     @staticmethod
     def load(path):
-        data = torch.load(path)
+        data = torch.load(path, weights_only=True)
         return DetectedDataset(data["tp"], data["conf"], data["ood_features"])
 
 
 @torch.no_grad()
-def collect_stats(network: torch.nn.Module, val_dataset: H5DatasetYolo):
+def collect_stats_and_feature(network: torch.nn.Module, val_dataset: H5DatasetYolo):
     device = next(network.parameters()).device
     dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True,
                             collate_fn=H5DatasetYolo.collate_fn)

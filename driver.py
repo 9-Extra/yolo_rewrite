@@ -7,7 +7,7 @@ from safe.attack import FSGMAttack, PDGAttack
 from scheduler import Target
 from schedules.schedule import Config
 import preprocess
-import train
+import yolo_train
 import search
 import scheduler
 
@@ -46,7 +46,7 @@ def target_collect_result():
 
     val_dataset = H5DatasetYolo(config.file_detected_base_dataset)
     print("样本数：", len(val_dataset))
-    result_dataset = search.collect_stats(network, val_dataset)
+    result_dataset = search.collect_stats_and_feature(network, val_dataset)
     result_dataset.save(config.file_detected_dataset)
 
 

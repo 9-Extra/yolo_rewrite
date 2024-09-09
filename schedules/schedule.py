@@ -32,7 +32,7 @@ class Config:
     @cached_property
     def trained_yolo_network(self):
         import yolo
-        network = yolo.Network.Yolo.load_from_checkpoint("run/weight/yolo_100.pth", num_class=self.num_class)
+        network = yolo.Network.Yolo.load_from_checkpoint("run/weight/yolo.pth", num_class=self.num_class)
         # network = torch.compile(network)
         return network
 
@@ -59,3 +59,6 @@ class Config:
     def extract_features_database(self):
         from search import ExtractFeatureDatabase
         return ExtractFeatureDatabase(self.h5_extract_features)
+
+    # vos
+    file_vos_yolo_weight = "run/weight/vos_yolo.pth"

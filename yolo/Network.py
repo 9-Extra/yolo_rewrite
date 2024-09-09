@@ -166,12 +166,13 @@ class BackBone(Module):
         x20 = self.feature_storage["x20"]
 
         self.feature_storage.clear()
-        return x17, x20, x23
+        return [x17, x20, x23]
 
 
 class Detect(Module):
     # YOLOv5 Detect head for detection models
     anchors: torch.Tensor
+    ch: list[int]
 
     def __init__(self, nc: int, anchors: list, ch: list):  # detection layer
         super().__init__()
@@ -183,6 +184,7 @@ class Detect(Module):
         self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
         self.origin_bbox = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
         self.register_buffer("anchors", torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
+        self.ch = ch
         self.m = torch.nn.ModuleList(
             torch.nn.Conv2d(x, self.no * self.na, 1)
             for x in ch
@@ -195,15 +197,24 @@ class Detect(Module):
     def forward(self, x: list[torch.Tensor]):
         """
         Processes input through YOLOv5 layers, altering shape for detection: `x(bs, 3, ny, nx, 85)`.
-        网络输出的最后一维的格式为：[x坐标, y坐标, 宽度, 高度, 置信度, 每个类别的logit]
+        网络输出x的最后一维的格式为：[x坐标, y坐标, 高度, 宽度, 置信度, 每个类别的logit]
         """
+        result = []
         for i in range(self.nl):
-            x[i] = self.m[i](x[i])  # 检测头，就是1x1卷积，输出an * (nc + 5)的特征图
+            y = self.m[i](x[i])  # 检测头，就是1x1卷积，输出an * (nc + 5)的特征图
             # 然后，将an（每层的anchor数）和nc + 5（一个物体的特征数）单独切分到两个维度里, x(bs,255,20,20) to x(bs,3,20,20,85)
-            x[i] = einops.rearrange(x[i], "bs (na no) ny nx -> bs na ny nx no", na=self.na, no=self.no)
-            x[i] = x[i].contiguous()
+            y = einops.rearrange(y, "bs (na no) ny nx -> bs na ny nx no", na=self.na, no=self.no)
+            result.append(y.contiguous())
+
+        return result
+
+    def forward_detector_id(self, x: torch.Tensor, detector_id: int):
+        x = self.m[detector_id](x)
+        x = einops.rearrange(x, "bs (na no) ny nx -> bs na ny nx no", na=self.na, no=self.no)
+        x = x.contiguous()
 
         return x
+
 
     def inference_post_process(self, x):
         # 网络输出的x是基于anchor的偏移量，需要转换成基于整个图像的坐标
@@ -220,7 +231,7 @@ class Detect(Module):
             # grid是网格中心点，anchor_grid是网格的大小
             # 这个sigmoid会对输入的所有数进行sigmoid，因为恰好结果中的每一项每个数都需要sigmoid
             x[i].sigmoid_()
-            xy, wh, conf, logit = x[i].split((2, 2, 1, self.nc), 4)
+            xy, hw, conf, logit = x[i].split((2, 2, 1, self.nc), 4)
             # xy * 2将结果映射到(0, 2)，再-1得到相对锚框中心点的偏移量(-1, 1)
             # 这个偏移量加上锚框中心点的位置gird得到bbox中心点在整个图像中的绝对坐标
             # 但这个坐标是基于该层的特征图的，每层的结果都是从特征图中通过1x1卷积提取出来，则每个锚框对应该层的特征图上的一个像素
@@ -230,15 +241,16 @@ class Detect(Module):
             # (wh * 2) ** 2 是yolo定义的从输出到 锚框长宽缩放比例 的映射，可以看出缩放可达最大4倍
             # anchor_grid是预先将预定义锚框大小self.anchors与缩放比例self.stride乘起来
             # 这样通过一次乘法就可以直接得到bbox相对原图像的大小
-            wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
+            hw = (hw * 2) ** 2 * self.anchor_grid[i]  # hw
 
             # 为了后续的OOD检测时从特征图中的正确的位置提取相关特征，添加每个输出的bbox的具体位置
             # origin_bbox = self.origin_bbox[i].expand(bs, -1, -1, -1, -1)
-            origin_bbox = torch.cat((xy, wh), dim=4) / 640
+            img_size = torch.tensor((ny, nx, ny, nx), device=xy.device) * self.stride[i]
+            origin_bbox = torch.cat((xy, hw), dim=4) / img_size
             # 为了后续知道此检测结果来自哪个layer，添加一个layer编号
             layer_id = torch.tensor(i, dtype=torch.float32, device=xy.device).expand(bs, self.na, ny, nx, 1)
 
-            y = torch.cat((xy, wh, conf, origin_bbox, layer_id, logit), 4)
+            y = torch.cat((xy, hw, conf, origin_bbox, layer_id, logit), 4)
 
             # 将所有位置的所有锚框的结果都合并到一个维度
             y = y.view(bs, self.na * nx * ny, y.shape[-1])
@@ -277,6 +289,9 @@ _ANCHORS = [
 
 
 class Yolo(pytorch_lightning.LightningModule):
+    backbone: BackBone
+    detect: Detect
+    loss_func: loss.ComputeLoss
 
     def __init__(self, num_class: int):
         super(Yolo, self).__init__()
@@ -305,7 +320,7 @@ class Yolo(pytorch_lightning.LightningModule):
     def inference(self, x):
         raw_output = self(x)
         raw_result = self.detect.inference_post_process(raw_output)
-        return non_max_suppression(raw_result)
+        return non_max_suppression(raw_result, self.detect.nc)
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters())

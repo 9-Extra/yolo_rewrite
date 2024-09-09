@@ -4,6 +4,8 @@ import torchvision
 
 def non_max_suppression(
         batch_prediction: torch.Tensor,
+        num_class: int,
+        num_extra_data: int = 0,
         conf_threshold=0.25,
         iou_threshold=0.45
 ) -> list[torch.Tensor]:
@@ -11,9 +13,8 @@ def non_max_suppression(
     非极大值抑制
     :return: 因为batch中每张图像包含的检测结果数不同，使用list放置每张图的结果
     """
-    # [x y w h conf origin_bbox cls]
-
-    num_classes = batch_prediction.shape[-1] - 10
+    # [x y w h conf origin_bbox layer_id cls extra]
+    assert batch_prediction.shape[-1] == 10 + num_class + num_extra_data
 
     results = []
     for prediction in batch_prediction:
@@ -28,13 +29,14 @@ def non_max_suppression(
 
         prediction = prediction[keep]
 
-        xy, wh, conf, origin_bbox, layer_id, class_prediction = prediction.split([2, 2, 1, 4, 1, num_classes], dim=-1)
+        xy, wh, conf, origin_bbox, layer_id, class_logit, extra_data = prediction.split([2, 2, 1, 4, 1, num_class, num_extra_data], dim=-1)
         x1y1 = xy - wh / 2
         x2y2 = xy + wh / 2
 
-        class_prediction = torch.argmax(class_prediction, dim=-1, keepdim=True)
-        prediction = torch.cat([x1y1, x2y2, conf, origin_bbox, layer_id, class_prediction.float()], -1)
+        cls = torch.argmax(class_logit, dim=-1, keepdim=True)
+        prediction = torch.cat([x1y1, x2y2, conf, origin_bbox, layer_id, cls.float(), extra_data], -1)
 
         results.append(prediction)
 
+    # 输出最后一维的格式为[true_bbox 0: 4, conf 4, origin_bbox 5: 9, layer_id 9, cls 10, ...]
     return results

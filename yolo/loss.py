@@ -1,6 +1,7 @@
 # YOLOv5 🚀 by Ultralytics, AGPL-3.0 license
 """Loss functions."""
 import math
+from typing import Sequence
 
 import torch
 import torch.nn as nn
@@ -107,7 +108,6 @@ class ComputeLoss(nn.Module):
         self.na = len(anchors[0]) // 2
 
         self.balance = [4.0, 1.0, 0.4]  # 为不同大小的锚框赋予不同权重，较小的要求更加精确
-        self.ssi = 0  # stride 16 index
         self.BCEcls, self.BCEobj, self.gr = BCEcls, BCEobj, 1.0
 
     def forward(self, predictions: list[torch.Tensor], targets: torch.Tensor) -> torch.Tensor:  # predictions, targets
@@ -116,7 +116,10 @@ class ComputeLoss(nn.Module):
         box_loss = torch.zeros(1, device=device)  # box loss
         conf_loss = torch.zeros(1, device=device)  # object loss
 
-        indexed_target = self.build_targets(predictions, targets)  # targets
+        # 检测头输出张量的两维大小，实际上是backbone最后一层的大小，此层每一个像素都是一个roi
+        feature_size = tuple((p.shape[3], p.shape[2]) for p in predictions)
+
+        indexed_target = self.build_targets(feature_size, targets)  # targets
         # Losses
         for pi, target, balance_weight in zip(predictions, indexed_target, self.balance):
             # pi的形状为[batch, anchor, gridy, gridx, 5+num_classes]
@@ -164,7 +167,7 @@ class ComputeLoss(nn.Module):
 
         return (box_loss + conf_loss + cls_loss) * bs
 
-    def build_targets(self, p, targets):
+    def build_targets(self, feature_size: tuple[tuple[int, int], ...], targets):
         """
         Prepares model targets from input targets (image,class,x,y,w,h) for loss computation, returning class, box,
         indices, and anchors.
@@ -183,9 +186,10 @@ class ComputeLoss(nn.Module):
         off = (torch.tensor([[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1]], device=device).float() * g)  # offsets
 
         for i in range(self.nl):
-            # 遍历每一层，获取该层的anchors和输出大小（也是特征图大小和输出bbox数）
-            anchors, shape = self.anchors[i], p[i].shape
-            grid_w, grid_h = shape[3], shape[2]
+            # 遍历每一层，获取该层的anchors
+            anchors = self.anchors[i]
+            # grid_w, grid_h为检测头输入的大小
+            grid_w, grid_h = feature_size[i]
             # gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
             gain[2], gain[3], gain[4], gain[5] = grid_w, grid_h, grid_w, grid_h
 
