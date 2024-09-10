@@ -24,7 +24,7 @@ def target_train():
     if os.path.isfile(config.file_yolo_weight):
         return # skip
 
-    train.main(config)
+    yolo_train.main(config)
 
 
 @Target()

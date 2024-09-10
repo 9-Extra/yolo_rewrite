@@ -1,5 +1,3 @@
-import os
-import atexit
 from collections.abc import Callable
 from typing import Optional, Literal
 
@@ -14,30 +12,17 @@ class _Context:
     def __init__(self):
         self.targets = {}
         self.state = {"running": set(), "completed": set()}
-        atexit.register(self._dump_state)
-
-    def init_state(self, file_state_record):
-        os.makedirs(os.path.dirname(file_state_record), exist_ok=True)
-        self.file_state_record = file_state_record
-        if os.path.isfile(file_state_record):
-            self.state = eval(open(file_state_record, "r").read())
 
     def register_target(self, func: TargetFunction, target: "Target"):
         assert target.name not in self.targets
         self.targets[func] = target
 
-    def _dump_state(self):
-        if self.file_state_record is not None:
-            open(self.file_state_record, "w").write(repr(self.state))
-
     def on_target_start(self, target: "Target"):
         self.state["running"].add(target.name)
-        self._dump_state()
 
     def on_target_complete(self, target: "Target"):
         self.state["running"].remove(target.name)
         self.state["completed"].add(target.name)
-        self._dump_state()
 
 
 _context = _Context()

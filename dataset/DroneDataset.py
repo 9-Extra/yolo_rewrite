@@ -30,7 +30,8 @@ class DroneDataset(RawDataset):
         ann_dir = os.path.join(root, "Drone_TrainSet_XMLs")
 
         self.items: list[DataItem] = []
-        for xml in tqdm.tqdm(os.listdir(ann_dir)):
+        # 为了保证在不同系统上分割的训练集是一致的，故排序
+        for xml in tqdm.tqdm(sorted(os.listdir(ann_dir))):
             filename, res = parse_xml(os.path.join(ann_dir, xml))
             if len(res) != 0:
                 self.items.append(DataItem(os.path.join(img_dir, filename), res))

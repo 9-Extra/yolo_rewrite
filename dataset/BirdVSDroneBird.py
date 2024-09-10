@@ -8,13 +8,13 @@ class BirdVSDroneBird(RawDataset.RawDataset):
         assert os.path.isdir(image_dir)
         items = []
 
-        file_list = os.listdir(image_dir)
-        file_list.sort()
-
+        file_list = sorted(os.listdir(image_dir))
+        train_len = int(len(file_list) * 0.8)
+        
         if split == "train":
-            file_list = file_list[:int(len(file_list) * 0.8)]
+            file_list = file_list[:train_len]
         elif split == "val":
-            file_list = file_list[int(len(file_list) * 0.8):]
+            file_list = file_list[train_len:]
         else:
             raise ValueError("split must be train or val")
 
