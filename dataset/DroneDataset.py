@@ -58,7 +58,7 @@ class DroneTestDataset(RawDataset):
         ann_dir = os.path.join(root, "Drone_TestSet_XMLs")
 
         self.items: list[DataItem] = []
-        for xml in tqdm.tqdm(os.listdir(ann_dir)):
+        for xml in tqdm.tqdm(sorted(os.listdir(ann_dir))): # 排序保证顺序一致
             filename, res = parse_xml(os.path.join(ann_dir, xml))
             if len(res) != 0:
                 self.items.append(DataItem(os.path.join(img_dir, filename), res))
