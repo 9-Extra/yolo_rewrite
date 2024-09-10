@@ -1,0 +1,6 @@
+lightning
+einops
+scikit-learn
+opencv-python
+h5py
+pandas
