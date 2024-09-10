@@ -1,4 +1,4 @@
-import cv2
+import os
 import h5py
 import numpy
 from torch.utils.data import Dataset
@@ -6,6 +6,8 @@ from torch.utils.data import Dataset
 
 class H5DatasetYolo(Dataset):
     def __init__(self, path: str):
+        assert os.path.isfile(path)
+        
         self.h5f = h5py.File(path, "r")
         self.images: h5py.Dataset = self.h5f["image"]
         self.slices = [slice(x1, x2) for x1, x2 in self.h5f["bbox_idx"][:]]

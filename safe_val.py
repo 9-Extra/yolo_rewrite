@@ -6,21 +6,15 @@ import pandas
 import torch
 from torch.utils.data import Dataset
 
-import preprocess
 import safe
 import scheduler
 import search
 from yolo.Network import Yolo
-from dataset.BirdVSDroneBird import BirdVSDroneBird
-from dataset.CocoBird import CocoBird
-from dataset.DroneDataset import DroneTestDataset, DroneDataset
-from dataset.RawDataset import delete_all_object, mix_raw_dataset
 from dataset.h5Dataset import H5DatasetYolo
 
 from driver import target_collect_result
 from safe.attack import FSGMAttack
 from safe.mlp import MLP
-from scheduler import Target
 from schedules.schedule import Config
 from yolo.validation import ap_per_class, collect_stats_with_mlp
 
@@ -43,24 +37,6 @@ def val(network: Yolo, ood_evaluator: MLP, val_dataset: Dataset):
     return map50, map, mr, auroc, fpr95, conf_auroc, conf_fpr95
 
     pass
-
-
-@Target()
-def do_preprocess():
-    drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
-    print("原测试集图像数=", len(drone_test))
-    preprocess.raw_dataset2h5("run/preprocess/drone_test.h5", drone_test)
-    coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
-    delete_all_object(coco_bird)
-    print("Coco中鸟图像数=", len(coco_bird))
-
-    preprocess.raw_dataset2h5("run/preprocess/test_drone_with_coco.h5", mix_raw_dataset([drone_test, coco_bird]))
-
-    bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
-    print("鸟图像数=", len(bird))
-    preprocess.raw_dataset2h5("run/preprocess/test_drone_with_bird.h5", mix_raw_dataset([drone_test, bird]))
-
-    preprocess.raw_dataset2h5(config.file_train_dataset, DroneDataset("G:\datasets\DroneTrainDataset"))
 
 
 def main(config: Config, data_paths: Sequence[str]):
@@ -121,12 +97,10 @@ def main(config: Config, data_paths: Sequence[str]):
 
 if __name__ == '__main__':
     config = Config()
-    scheduler.init_context(config.file_state_record)
-    scheduler.run_target(do_preprocess)
     scheduler.run_target(target_collect_result)
     data_paths = [
         "run/preprocess/drone_test.h5",
-        "run/preprocess/test_drone_with_bird.h5",
-        "run/preprocess/test_drone_with_coco.h5"
+        "run/preprocess/drone_test_with_bird.h5",
+        "run/preprocess/drone_test_with_coco.h5"
     ]
     main(config, data_paths)

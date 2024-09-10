@@ -7,7 +7,6 @@ TargetFunction = Callable[[], None]
 class _Context:
     state: dict[Literal["running", "completed"], set[str]]
     targets: dict[TargetFunction, "Target"]
-    file_state_record: Optional[str]
 
     def __init__(self):
         self.targets = {}
@@ -26,11 +25,6 @@ class _Context:
 
 
 _context = _Context()
-
-
-def init_context(file_state_record: str):
-    global _context
-    _context.init_state(file_state_record)
 
 
 class Target:
@@ -102,3 +96,16 @@ def virtual_run_target(target: TargetFunction):
 
     for func in execute:
         print(f"Run {_context.targets[func].name}")
+
+
+def get_target_by_name(name: str) -> Optional[TargetFunction]:
+    global _context
+    for func, target in _context.targets.items():
+        if target.name == name:
+            return func
+
+    return None
+
+def get_target_names() -> list[str]:
+    global _context
+    return [target.name for target in _context.targets.values()]

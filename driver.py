@@ -1,12 +1,12 @@
-import os.path
+import argparse
 import sys
+from typing import Sequence
 
 import safe
 from dataset.h5Dataset import H5DatasetYolo
 from safe.attack import FSGMAttack, PDGAttack
 from scheduler import Target
 from schedules.schedule import Config
-import preprocess
 import yolo_train
 import search
 import scheduler
@@ -15,31 +15,11 @@ config = Config()
 
 
 @Target()
-def target_preprocess_train_dataset():
-    preprocess.raw_dataset2h5(config.file_train_dataset, config.raw_train_dataset)
-
-
-@Target(target_preprocess_train_dataset)
 def target_train():
-    if os.path.isfile(config.file_yolo_weight):
-        return # skip
-
     yolo_train.main(config)
 
 
-@Target()
-def target_preprocess_result_val_dataset():
-    from dataset.DroneDataset import DroneDataset
-    from dataset.CocoBird import CocoBird
-    from dataset.RawDataset import mix_raw_dataset, delete_all_object
-    drone_val = DroneDataset(r"G:\datasets\DroneTrainDataset", split="val")
-    coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
-    delete_all_object(coco_bird)
-    raw_detected_base_dataset = mix_raw_dataset([drone_val, coco_bird])
-    preprocess.raw_dataset2h5(config.file_detected_base_dataset, raw_detected_base_dataset)
-
-
-@Target(target_train, target_preprocess_result_val_dataset)
+@Target(target_train)
 def target_collect_result():
     network = config.trained_yolo_network
     network.to(config.device, non_blocking=True)
@@ -171,10 +151,48 @@ class WindowsInhibitor:
                 WindowsInhibitor.ES_CONTINUOUS)
 
 
-if __name__ == '__main__':
-    print("Start")
+def _run_targets(names: Sequence[str]):
+    targets = []
+    unknown_targets = []
+    for name in args.items:
+        target_func = scheduler.get_target_by_name(name)
+        if target_func is None:
+            unknown_targets.append(name)
+        else:
+            targets.append(target_func)
+
+    if len(unknown_targets) != 0:
+        raise RuntimeError(f"存在未知目标: {unknown_targets}")
+
+    print(f"Run targets {names}")
     with WindowsInhibitor():
-        scheduler.init_context(config.file_state_record)
-        scheduler.re_run_target(target_search_layer)
+        for t in targets:
+            scheduler.run_target(t)
 
     print("Done!")
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser("调用一些乱七八糟的方法")
+
+    # 创建子命令解析器
+    subparsers = parser.add_subparsers(dest='command', help='列出目标或执行目标')
+
+    # 创建 list 命令的解析器
+    parser_list = subparsers.add_parser('list', help='列出所有项目')
+
+    # 创建 run 命令的解析器
+    parser_run = subparsers.add_parser('run', help='运行项目')
+    parser_run.add_argument('items', metavar='item', type=str, nargs='+',
+                            help='要运行的项目')
+
+    # 解析命令行参数
+    args = parser.parse_args()
+
+    if args.command == 'list':
+        for name in scheduler.get_target_names():
+            print(name)
+    elif args.command == 'run':
+        if not args.items:
+            print('错误：run 命令需要至少一个项目名称。')
+        else:
+            _run_targets(args.items)

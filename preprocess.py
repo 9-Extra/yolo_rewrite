@@ -6,6 +6,7 @@ import h5py
 import numpy
 import tqdm
 
+from dataset.DroneDataset import DroneDataset
 from dataset.DroneDataset import DroneTestDataset
 from dataset.RawDataset import RawDataset, mix_raw_dataset, delete_all_object
 from dataset.BirdVSDroneBird import BirdVSDroneBird
@@ -92,8 +93,9 @@ def process_data(origin_img: str, objs: list, target_size: tuple[int, int]):
     return img, mapped_objs
 
 
-def raw_dataset2h5(dist: str, data: RawDataset):
-    if os.path.isfile(dist):
+def raw_dataset2h5(dist: str, data: RawDataset, skip_if_exist: bool = True):
+    if skip_if_exist and os.path.isfile(dist):
+        print(f"Skip {dist} since it exists.")
         return
     os.makedirs(os.path.dirname(dist), exist_ok=True)
     target_size = [640, 640]
@@ -127,15 +129,28 @@ def raw_dataset2h5(dist: str, data: RawDataset):
 
 
 if __name__ == '__main__':
-    drone_test = DroneTestDataset(r"G:\datasets\DroneTestDataset")
+    drone_train_dir = r"G:/datasets/DroneTrainDataset/"
+    drone_test_dir = r"G:/datasets/DroneTestDataset/"
+    coco_dir = r"D:/迅雷下载/"
+    drone_vs_bird_dir = r"G:/datasets/BirdVsDrone"
+
+    drone_train = DroneDataset(drone_train_dir, split="train")
+    print("训练集图像数= ", len(drone_train))
+    raw_dataset2h5("./run/preprocess/drone_train.h5", drone_train)
+    
+    drone_val = DroneDataset(drone_train_dir, split="val")
+    print("验证集图像数= ", len(drone_val))
+    raw_dataset2h5("./run/preprocess/drone_val.h5", drone_val)
+
+    drone_test = DroneTestDataset(drone_test_dir)
     print("原测试集图像数=", len(drone_test))
-    raw_dataset2h5("preprocess/drone_test.h5", drone_test)
-    coco_bird = CocoBird(r"D:\迅雷下载\train2017", r"D:\迅雷下载\annotations\instances_train2017.json")
+    raw_dataset2h5("./run/preprocess/drone_test.h5", drone_test)
+
+    coco_bird = CocoBird(os.path.join(coco_dir, "train2017"), os.path.join(coco_dir, "annotations/instances_train2017.json"))
     delete_all_object(coco_bird)
     print("Coco中鸟图像数=", len(coco_bird))
+    raw_dataset2h5("./run/preprocess/drone_test_with_coco.h5", mix_raw_dataset([drone_test, coco_bird]))
 
-    raw_dataset2h5("preprocess/test_drone_with_coco.h5", mix_raw_dataset([drone_test, coco_bird]))
-
-    bird = BirdVSDroneBird("G:/datasets/BirdVsDrone/Birds")
+    bird = BirdVSDroneBird(os.path.join(r"G:/datasets/BirdVsDrone", "Birds"))
     print("鸟图像数=", len(bird))
-    raw_dataset2h5("preprocess/test_drone_with_bird.h5", mix_raw_dataset([drone_test, bird]))
+    raw_dataset2h5("./run/preprocess/drone_test_with_bird.h5", mix_raw_dataset([drone_test, bird]))

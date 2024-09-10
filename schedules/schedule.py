@@ -10,36 +10,25 @@ class Config:
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
-    file_state_record = "run/state.txt"
-
     # yolo
     num_class = 1
     dir_checkpoint = "run/weight"
-    file_train_dataset = "run/preprocess/drone_test.h5"
+    file_train_dataset = "run/preprocess/drone_train.h5"
+    file_val_dataset = "run/preprocess/drone_val.h5"
     file_yolo_weight = "run/weight/yolo.pth"
     yolo_epoch = 100
 
     @cached_property
-    def raw_train_dataset(self):
-        from dataset.DroneDataset import DroneDataset
-        return DroneDataset(r"G:\datasets\DroneTrainDataset", split="train")
-
-    @cached_property
-    def train_dataset(self):
-        from dataset.h5Dataset import H5DatasetYolo
-        return H5DatasetYolo(self.file_train_dataset)
-
-    @cached_property
     def trained_yolo_network(self):
         import yolo
-        network = yolo.Network.Yolo.load_from_checkpoint("run/weight/yolo.pth", num_class=self.num_class)
+        network = yolo.Network.Yolo.load_from_checkpoint(self.file_yolo_weight, num_class=self.num_class)
         # network = torch.compile(network)
         return network
 
 
     # mlp
     mlp_epoch = 20
-    file_detected_base_dataset = "run/preprocess/detected_base.h5"
+    file_detected_base_dataset = "./run/preprocess/drone_val.h5"
     file_detected_dataset = "run/preprocess/detected_dataset.pth"
     file_multi_layer_search_summary = "run/summary/multi_layer_search.json"
 

@@ -52,12 +52,14 @@ def main(config: Config, data_paths: Sequence[str]):
         print(f"正在使用数据集{path}验证网络")
         dataset = H5DatasetYolo(path)
         result = val(network, dataset)
-        collect.append((path, "vos" ,*result))
+        collect.append((path, "vos", *result))
     pass
 
-    collect = pandas.DataFrame(collect, columns=['dataset', 'weight', 'map50', 'map95', 'recall', 'auroc', 'fpr95', 'conf_auroc', 'conf_fpr95'])
+    collect = pandas.DataFrame(collect,
+                               columns=['dataset', 'weight', 'map50', 'map95', 'recall', 'auroc', 'fpr95', 'conf_auroc',
+                                        'conf_fpr95'])
 
-    os.makedirs("run/summary", exist_ok=True )
+    os.makedirs("run/summary", exist_ok=True)
     collect.to_csv("run/summary/vos_test_result.csv")
     print(collect.to_latex(index=False))
 
@@ -66,7 +68,6 @@ if __name__ == '__main__':
     config = Config()
     data_paths = [
         "run/preprocess/drone_test.h5",
-        "run/preprocess/test_drone_with_bird.h5",
-        "run/preprocess/test_drone_with_coco.h5"
-    ]
+        "run/preprocess/drone_test_with_bird.h5",
+        "run/preprocess/drone_test_with_coco.h5"]
     main(config, data_paths)
