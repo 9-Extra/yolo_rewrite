@@ -80,7 +80,8 @@ class VOSDetect(torch.nn.Module):
         :param x: 检测头输入的像素（roi），来自三个层
         :return: OOD score
         """
-        return [torch.sigmoid_(detect(x_i).squeeze()) for x_i, detect in zip(x, self.ood_detector)]
+        # squeeze(-3) 用于移除channel layer
+        return [torch.sigmoid_(detect(x_i).squeeze_(-3)) for x_i, detect in zip(x, self.ood_detector)]
 
 
     def inference_post_process(self, x: list[torch.Tensor]):
@@ -226,8 +227,6 @@ class VosYolo(pytorch_lightning.LightningModule):
             
             # 收集特征
             for type_id in range(self._feature_cache.num_class):
-                if self._feature_cache.is_enough(detector_id, type_id):
-                    continue
                 f = pos_roi[torch.logical_and(a == detector_id, cls == type_id)]
                 self._feature_cache.put_feature(detector_id, type_id, f)
 

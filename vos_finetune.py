@@ -29,7 +29,6 @@ def _trainer(max_epochs: int, fast_dev_run: bool = False):
     return pytorch_lightning.Trainer(
         max_epochs=max_epochs,
         precision="32-true",
-        val_check_interval=0,
         check_val_every_n_epoch=1,
         callbacks=[RichProgressBarTinkered(leave=True), RichModelSummary(max_depth=3), checkpoint],
         default_root_dir="run",
@@ -49,7 +48,7 @@ def vos_finetune_val(config: Config):
          "run/preprocess/drone_test_with_coco.h5"]
     ]
     vos = VosYolo(config.num_class)
-    vos.yolo.load_state_dict(torch.load(config.file_yolo_weight, weights_only=True)['state_dict'])
+    vos.yolo.load_state_dict(torch.load(config.file_yolo_weight, weights_only=True))
     # network = torch.compile(network, backend="cudagraphs")
 
     train_dataloader = DataLoader(
