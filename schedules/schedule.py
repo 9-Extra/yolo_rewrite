@@ -20,15 +20,16 @@ class Config:
 
     @cached_property
     def trained_yolo_network(self):
-        import yolo
-        network = yolo.Network.Yolo.load_from_checkpoint(self.file_yolo_weight, num_class=self.num_class)
+        from yolo.Network import Yolo
+        network = Yolo(self.num_class)
+        network.load_state_dict(torch.load(self.file_yolo_weight, weights_only=True))
         # network = torch.compile(network)
         return network
 
 
     # mlp
     mlp_epoch = 20
-    file_detected_base_dataset = "./run/preprocess/drone_val.h5"
+    file_detected_base_dataset = "run/preprocess/drone_val.h5"
     file_detected_dataset = "run/preprocess/detected_dataset.pth"
     file_multi_layer_search_summary = "run/summary/multi_layer_search.json"
 

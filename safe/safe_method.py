@@ -206,6 +206,9 @@ def extract_features_h5(network: yolo.Network.Yolo,
             feature_extractor.ready()
             prediction = network.inference(img)
             feature_dict = feature_roi_flatten(feature_extractor.get_features(), prediction)
+
+
+
             saver.save_positive_feature(feature_dict)
 
             # 对抗攻击目标特征

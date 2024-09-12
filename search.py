@@ -15,7 +15,7 @@ from safe.FeatureExtract import FeatureExtract
 from safe.safe_method import ExtractFeatureDatabase
 from safe.mlp import MLP, train_mlp
 from yolo.validation import process_batch
-from yolo.Network import FeatureExporter, BackBone, Conv, FeatureConcat
+from yolo.Network import FeatureExporter, BackBone, Conv, FeatureConcat, Yolo
 from yolo.non_max_suppression import non_max_suppression
 
 
@@ -68,7 +68,7 @@ class DetectedDataset:
 
 
 @torch.no_grad()
-def collect_stats_and_feature(network: torch.nn.Module, val_dataset: H5DatasetYolo):
+def collect_stats_and_feature(network: Yolo, val_dataset: H5DatasetYolo):
     device = next(network.parameters()).device
     dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True,
                             collate_fn=H5DatasetYolo.collate_fn)
@@ -96,9 +96,7 @@ def collect_stats_and_feature(network: torch.nn.Module, val_dataset: H5DatasetYo
         # target = torch.from_numpy(target).to(device)
 
         feature_extractor.ready()
-        output = network(img)
-        output = network.detect.inference_post_process(output)
-        output = non_max_suppression(output)
+        output = network.inference(img)
 
         for i, batch_p in enumerate(output):  # 对于每一张图像上的结果
             predictions = batch_p.numpy(force=True)

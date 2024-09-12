@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from yolo.Network import Yolo
 from yolo.non_max_suppression import non_max_suppression
-from yolo.validation import process_batch, ap_per_class
+from yolo.validation import process_batch, ap_per_class, bbox_ratio2pixel
 
 
 def _weighted_log_sum_exp(value, weight, dim: int) -> torch.Tensor:
@@ -268,21 +268,15 @@ class VosYolo(pytorch_lightning.LightningModule):
         # Print results
         print(f"map50 = {map50:.2%}, map = {map:.2%}, 召回率 = {mr:.2%}")
         print(f"AUROC = {auroc:.2} FPR95={fpr95:.2}, threshold={threshold:.4}")
-        self.log_dict({"auroc": auroc, "fpr95": fpr95}, on_epoch=True, on_step=False)
+        self.log_dict({"map50": map50, "map": map, "recall": mr, "auroc": auroc, "fpr95": fpr95, "conf_auroc": conf_auroc, "conf_fpr95": conf_fpr95})
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         img, target = batch
-        img_h, img_w = img.shape[2:]  # noqa
 
         img = torch.from_numpy(img).to(self.device, non_blocking=True).float() / 255
-        center_x, center_y, w, h = target[:, 2], target[:, 3], target[:, 4], target[:, 5]
-        x1 = center_x - w / 2
-        y1 = center_y - h / 2
-        x2 = center_x + w / 2
-        y2 = center_y + h / 2
-        target[:, 2:] = numpy.stack([x1, y1, x2, y2], -1) * numpy.array([img_w, img_h, img_w, img_h],
-                                                                dtype=numpy.float32)
-        
+
+        batched_labels = numpy.concatenate((target[:, 1:2], bbox_ratio2pixel(target[:, 2:], img.shape)), axis=-1)
+
         backbone_output = self.yolo.backbone(img)
         bbox_conf_logit = self.yolo.detect.inference_post_process(self.yolo.detect(backbone_output))
         ood_scores = self.vos_detect.inference_post_process(self.vos_detect(backbone_output))
@@ -291,7 +285,7 @@ class VosYolo(pytorch_lightning.LightningModule):
         for i, batch_p in enumerate(prediction):  # 遍历每一张图的结果
             batch_p = batch_p.numpy(force=True)
             # 取得对应batch的正确label
-            labels = target[target[:, 0] == i, 1:]
+            labels = batched_labels[target[:, 0] == i]
 
             # 检测结果实际上分三类：正确匹配的正样本，没有被匹配的正样本，误识别的负样本
             # 在进行OOD检测时需要区分这三种样本

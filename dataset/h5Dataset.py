@@ -27,6 +27,9 @@ class H5DatasetYolo(Dataset):
 
     @staticmethod
     def collate_fn(batch):
+        """
+        :return: labels 的最后一维格式为[batch_id 0, cls 1, bbox 2: 6]
+        """
         im, bboxes_batch = zip(*batch)  # transposed
         labels = []
         for i, bbox in enumerate(bboxes_batch):

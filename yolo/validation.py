@@ -1,15 +1,7 @@
 import cv2
 import numpy
 import torch
-from rich.progress import track
 from sklearn import metrics
-from torch.utils.data import Dataset, DataLoader
-
-import yolo.Network
-from dataset.h5Dataset import H5DatasetYolo
-from safe.FeatureExtract import FeatureExtract
-from safe.mlp import MLP
-from safe.safe_method import feature_roi_flatten
 
 
 def box_iou(box1, box2):
@@ -137,12 +129,12 @@ def ap_per_class(stat, eps=1e-16):
             ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
 
     # 统计OOD检测结果
-    print("总样本数：", len(conf))
+    # print("总样本数：", len(conf))
     detect_mask = conf != 0
-    print("真正检测结果数：", numpy.count_nonzero(detect_mask))
+    # print("真正检测结果数：", numpy.count_nonzero(detect_mask))
     detect_ood = ood_score[detect_mask]
     detect_gt = tp[detect_mask, 0]  # 真正的目标
-    print("检测结果中正确的目标数：", numpy.count_nonzero(detect_gt))
+    # print("检测结果中正确的目标数：", numpy.count_nonzero(detect_gt))
     assert detect_ood.shape[0] == detect_gt.shape[0]
 
     # 使用ood_score计算auroc
@@ -209,150 +201,67 @@ def process_batch(detections, labels, iouv):
     return correct
 
 
-@torch.no_grad()
-def collect_stats_with_mlp(network: yolo.Network.Yolo, mlp: MLP, val_dataset: Dataset):
-    device = network.device
-    dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True,
-                            collate_fn=H5DatasetYolo.collate_fn)
+def bbox_ratio2pixel(batched_bbox: numpy.ndarray, img_shape: torch.Size) -> numpy.ndarray:
+    """
+    :param batched_bbox: H5DatasetYolo输出的bbox后4列
+    :param img_shape: 图像大小
+    :return: 以像素为大小[x1, y1, x2, y2]格式的bbox，用于检验
+    """
+    img_h, img_w = img_shape[2:]
+    gain = numpy.array([img_w, img_h, img_w, img_h], dtype=numpy.float32)
 
-    network.eval()
-    feature_extractor = FeatureExtract(set(mlp.layer_name_list))
-    feature_extractor.attach(network)
+    center_x, center_y, w, h = batched_bbox[:, 0], batched_bbox[:, 1], batched_bbox[:, 2], batched_bbox[:, 3]
+    x1 = center_x - w / 2
+    y1 = center_y - h / 2
+    x2 = center_x + w / 2
+    y2 = center_y + h / 2
+    return numpy.stack([x1, y1, x2, y2], -1) * gain
 
-    mlp.eval()
 
+def match_nms_prediction(prediction: list[torch.Tensor], target: numpy.ndarray, img_shape: torch.Size):
+    """
+    将经过NMS后的预测结果与目标进行匹配。此函数并不在计算损失时使用，计算损失时另一套特殊的方法
+    :param prediction: non_max_suppression()或者Yolo.inference()的输出
+    :param target: H5DatasetYolo输出的targets，迭代时输出元组的第[1]个
+    :param img_shape: 图像大小
+    :return:
+    """
     iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
     niou = iouv.size
+
     stats = []
 
-    for img, target in track(dataloader):
-        img_h, img_w = img.shape[2:]  # noqa
+    batched_labels = numpy.concatenate((target[:, 1:2], bbox_ratio2pixel(target[:, 2:], img_shape)), axis=-1)
 
-        img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
-        center_x, center_y, w, h = target[:, 2], target[:, 3], target[:, 4], target[:, 5]
-        x1 = center_x - w / 2
-        y1 = center_y - h / 2
-        x2 = center_x + w / 2
-        y2 = center_y + h / 2
-        target[:, 2:] = numpy.stack([x1, y1, x2, y2], -1) * numpy.array([img_w, img_h, img_w, img_h],
-                                                                        dtype=numpy.float32)
+    for i, batch_p in enumerate(prediction):  # 遍历每一张图的结果
+        batch_p = batch_p.numpy(force=True)
+        # 取得对应batch的正确label
+        labels = batched_labels[target[:, 0] == i]
 
-        feature_extractor.ready()
-        prediction = network.inference(img)
+        # 检测结果实际上分三类：正确匹配的正样本，没有被匹配的正样本，误识别的负样本
+        # 在进行OOD检测时需要区分这三种样本
 
-        if sum(p.shape[0] for p in prediction) != 0:
-            feature_dict = feature_roi_flatten(feature_extractor.get_features(), prediction)
-            feature = torch.cat([feature_dict[layer] for layer in mlp.layer_name_list], dim=1) # 按层序拼接
-            ood_scores = mlp(feature).numpy(force=True)
-            del feature_dict, feature
+        nl, npr = labels.shape[0], batch_p.shape[0]  # number of labels, predictions
+
+        if npr == 0:
+            # 没有预测任何东西
+            if nl != 0:  # 但是实际上有东西
+                correct = numpy.zeros([nl, niou], dtype=bool)  # 全错
+                # 没有被匹配的正样本
+                stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
         else:
-            ood_scores = torch.empty(0, device=device)
-
-        assert sum(p.shape[0] for p in prediction) == ood_scores.shape[0], "有多少个检测结果就有多少个ood_score"
-
-        offset = 0 # 因为ood_scores是所有图的ood检测结果拼接起来的，每张图的结果数又不一样，需要使用offset访问
-        for i, batch_p in enumerate(prediction):  # 遍历每一张图的结果
-            batch_p = batch_p.numpy(force=True)
-            # 取得对应batch的正确label
-            labels = target[target[:, 0] == i, 1:]
-
-            # 检测结果实际上分三类：正确匹配的正样本，没有被匹配的正样本，误识别的负样本
-            # 在进行OOD检测时需要区分这三种样本
-
-            nl, npr = labels.shape[0], batch_p.shape[0]  # number of labels, predictions
-
-            if npr == 0:
-                # 没有预测任何东西
-                if nl != 0:  # 但是实际上有东西
-                    correct = numpy.zeros([nl, niou], dtype=bool)  # 全错
-                    # 没有被匹配的正样本
-                    stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
+            if nl != 0:  # 实际上也有东西，这个时候才需要进行判断
+                # 可能产生三种样本
+                correct = process_batch(batch_p, labels, iouv)
             else:
-                if nl != 0:  # 实际上也有东西，这个时候才需要进行判断
-                    # 可能产生三种样本
-                    correct = process_batch(batch_p, labels, iouv)
-                else:
-                    # 误识别的负样本
-                    correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
+                # 误识别的负样本
+                correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
 
-                conf = batch_p[:, 4]
-                cls = batch_p[:, 10]
+            conf = batch_p[:, 4]
+            cls = batch_p[:, 10]
 
-                ood_score = ood_scores[offset: offset + npr]
-                stats.append((correct, conf, ood_score, cls, labels[:, 0]))  # (correct, conf, pcls, tcls)
-
-            offset += npr # 偏移结果数
-        pass
-
-        assert offset == ood_scores.shape[0]
-    pass
-
-    feature_extractor.detach()
-
-    stats = [numpy.concatenate(x, 0) for x in zip(*stats)]  # to numpy
+            stats.append((correct, conf, numpy.zeros(npr), cls, labels[:, 0]))  # (correct, conf, ood_score, pcls, tcls)
 
     return stats
 
-
-@torch.no_grad()
-def collect_stats(network: yolo.Network.Yolo, val_dataset: Dataset):
-    device = network.device
-    dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True,
-                            collate_fn=H5DatasetYolo.collate_fn)
-
-    network.eval()
-
-    iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
-    niou = iouv.size
-    stats = []
-
-    for img, target in track(dataloader):
-        img_h, img_w = img.shape[2:]  # noqa
-
-        img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
-        center_x, center_y, w, h = target[:, 2], target[:, 3], target[:, 4], target[:, 5]
-        x1 = center_x - w / 2
-        y1 = center_y - h / 2
-        x2 = center_x + w / 2
-        y2 = center_y + h / 2
-        target[:, 2:] = numpy.stack([x1, y1, x2, y2], -1) * numpy.array([img_w, img_h, img_w, img_h],
-                                                                        dtype=numpy.float32)
-
-        prediction = network.inference(img)
-
-        for i, batch_p in enumerate(prediction):  # 遍历每一张图的结果
-            batch_p = batch_p.numpy(force=True)
-            # 取得对应batch的正确label
-            labels = target[target[:, 0] == i, 1:]
-
-            # 检测结果实际上分三类：正确匹配的正样本，没有被匹配的正样本，误识别的负样本
-            # 在进行OOD检测时需要区分这三种样本
-
-            nl, npr = labels.shape[0], batch_p.shape[0]  # number of labels, predictions
-
-            if npr == 0:
-                # 没有预测任何东西
-                if nl != 0:  # 但是实际上有东西
-                    correct = numpy.zeros([nl, niou], dtype=bool)  # 全错
-                    # 没有被匹配的正样本
-                    stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
-            else:
-                if nl != 0:  # 实际上也有东西，这个时候才需要进行判断
-                    # 可能产生三种样本
-                    correct = process_batch(batch_p, labels, iouv)
-                else:
-                    # 误识别的负样本
-                    correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
-
-                conf = batch_p[:, 4]
-                cls = batch_p[:, 10]
-
-                stats.append((correct, conf, conf, cls, labels[:, 0]))  # (correct, conf, pcls, tcls)
-        pass
-
-    pass
-
-    stats = [numpy.concatenate(x, 0) for x in zip(*stats)]  # to numpy
-
-    return stats
 

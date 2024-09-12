@@ -1,4 +1,5 @@
 import argparse
+import os.path
 import sys
 from typing import Sequence
 
@@ -21,6 +22,9 @@ def target_train():
 
 @Target(target_train)
 def target_collect_result():
+    if os.path.exists(config.file_detected_dataset):
+        return
+
     network = config.trained_yolo_network
     network.to(config.device, non_blocking=True)
 
