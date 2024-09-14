@@ -218,12 +218,18 @@ def bbox_ratio2pixel(batched_bbox: numpy.ndarray, img_shape: torch.Size) -> nump
     return numpy.stack([x1, y1, x2, y2], -1) * gain
 
 
-def match_nms_prediction(prediction: list[torch.Tensor], target: numpy.ndarray, img_shape: torch.Size):
+def match_nms_prediction(
+        prediction: list[torch.Tensor],
+        target: numpy.ndarray,
+        img_shape: torch.Size,
+        ood_score_pos: int = 4
+        ):
     """
     将经过NMS后的预测结果与目标进行匹配。此函数并不在计算损失时使用，计算损失时另一套特殊的方法
     :param prediction: non_max_suppression()或者Yolo.inference()的输出
     :param target: H5DatasetYolo输出的targets，迭代时输出元组的第[1]个
     :param img_shape: 图像大小
+    :param ood_score_pos: ood_score在prediction张量最后一维的下标，默认使用置信度
     :return:
     """
     iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
@@ -259,9 +265,8 @@ def match_nms_prediction(prediction: list[torch.Tensor], target: numpy.ndarray, 
 
             conf = batch_p[:, 4]
             cls = batch_p[:, 10]
+            ood_score = batch_p[:, ood_score_pos]
 
-            stats.append((correct, conf, numpy.zeros(npr), cls, labels[:, 0]))  # (correct, conf, ood_score, pcls, tcls)
+            stats.append((correct, conf, ood_score, cls, labels[:, 0]))  # (correct, conf, ood_score, pcls, tcls)
 
     return stats
-
-

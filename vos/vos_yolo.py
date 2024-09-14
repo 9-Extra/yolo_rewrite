@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Any
 
 import einops
@@ -11,11 +12,11 @@ from torch.utils.data import DataLoader
 
 from yolo.Network import Yolo
 from yolo.non_max_suppression import non_max_suppression
-from yolo.validation import process_batch, ap_per_class, bbox_ratio2pixel
+from yolo.validation import ap_per_class, match_nms_prediction
 
 
 def _weighted_log_sum_exp(value, weight, dim: int) -> torch.Tensor:
-    # from https://github.com/deeplearning-wisc/vos/blob/main/detection/modeling/roihead_gmm.py
+    # from https://github.com/deeplearning-wisc/vos
     """Numerically stable implementation of the operation
     value.exp().sum(dim, keepdim).log()
     """
@@ -25,7 +26,7 @@ def _weighted_log_sum_exp(value, weight, dim: int) -> torch.Tensor:
 
 
 def _gen_ood_samples(roi_features: list[torch.Tensor], select: int = 1, sample_from: int = 10000):
-    # from https://github.com/deeplearning-wisc/vos/blob/main/detection/modeling/roihead_gmm.py
+    # from https://github.com/deeplearning-wisc/vos
     # the covariance finder needs the data to be centered.
 
     X = []  # 中心归一化后的特征
@@ -47,7 +48,7 @@ def _gen_ood_samples(roi_features: list[torch.Tensor], select: int = 1, sample_f
         new_dis = torch.distributions.multivariate_normal.MultivariateNormal(
             mean, covariance_matrix=temp_precision
         )
-        negative_samples = new_dis.rsample(torch.Size((sample_from, )))  # 重参数化技巧采样得到负样本，保证此过程可微，这里其实和正常的采样没有区别
+        negative_samples = new_dis.rsample(torch.Size((sample_from,)))  # 重参数化技巧采样得到负样本，保证此过程可微，这里其实和正常的采样没有区别
         prob_density = new_dis.log_prob(negative_samples)  # 计算对数概率密度
 
         # 保留概率密度最低的self.select个负样本作为OOD样本
@@ -83,7 +84,6 @@ class VOSDetect(torch.nn.Module):
         # squeeze(-3) 用于移除channel layer
         return [torch.sigmoid_(detect(x_i).squeeze_(-3)) for x_i, detect in zip(x, self.ood_detector)]
 
-
     def inference_post_process(self, x: list[torch.Tensor]):
         z = []
         for x_i in x:
@@ -91,8 +91,7 @@ class VOSDetect(torch.nn.Module):
             y = einops.repeat(x_i, 'bs ny nx -> bs (c ny nx) l', c=self.num_anchors, l=1)
             z.append(y)
         return torch.cat(z, 1)
-    
-    
+
     def loss(self, x: list[torch.Tensor], y: list[torch.Tensor]):
         loss = sum(torch.nn.functional.mse_loss(x_i, y_i) for x_i, y_i in zip(self(x), y))
         return loss
@@ -137,7 +136,7 @@ class _FeatureCache:
         feature_count = feature.shape[0]
         pos_idx = self._get_index(detector_id, type_id)
 
-        if self._features[pos_idx].numel() == 0: # 还没有开辟空间，就先开空间
+        if self._features[pos_idx].numel() == 0:  # 还没有开辟空间，就先开空间
             self._features[pos_idx] = torch.empty((self.sample_number, feature.shape[-1]), device=feature.device)
 
         assert self._features[pos_idx].shape[-1] == feature.shape[-1]
@@ -191,18 +190,15 @@ class VosYolo(pytorch_lightning.LightningModule):
         self.vos_detect = VOSDetect(self.yolo.detect.na, self.yolo.detect.ch)
 
         # for val
-        self._val_stats = []
+        self._val_stats = defaultdict(list)
         self._val_iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
         self._val_niou = self._val_iouv.size
-
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.yolo.forward(x)
 
-
     def configure_optimizers(self):
         return self.yolo.configure_optimizers()
-
 
     def training_step(self, batch, batch_idx):
         # yolo train
@@ -224,22 +220,23 @@ class VosYolo(pytorch_lightning.LightningModule):
         for detector_id, index, new_feature in zip(range(self.yolo.detect.nl), indexed_target, backbone_output):
             b, a, gj, gi, _, _, cls = index
             pos_roi: torch.Tensor = new_feature[b, :, gj, gi]
-            
+
             # 收集特征
             for type_id in range(self._feature_cache.num_class):
                 f = pos_roi[torch.logical_and(a == detector_id, cls == type_id)]
                 self._feature_cache.put_feature(detector_id, type_id, f)
 
-            collect_feature = [self._feature_cache.get_feature(detector_id, type_id) for type_id in range(self.yolo.detect.nc)]
+            collect_feature = [self._feature_cache.get_feature(detector_id, type_id) for type_id in
+                               range(self.yolo.detect.nc)]
             neg_roi = _gen_ood_samples(collect_feature)
 
             x = torch.cat((pos_roi, neg_roi)).unsqueeze_(-1).unsqueeze_(-1)
-            label = torch.zeros(pos_roi.shape[0] + neg_roi.shape[0], device=pos_roi.device, dtype=torch.long)
+            label = torch.zeros((pos_roi.shape[0] + neg_roi.shape[0], 1, 1), device=pos_roi.device, dtype=torch.long)
             label[:pos_roi.shape[0]] = 1
 
             X.append(x)
             Y.append(label)
-        pass 
+        pass
 
         vos_loss = self.vos_detect.loss(X, Y)
 
@@ -260,58 +257,33 @@ class VosYolo(pytorch_lightning.LightningModule):
         self._val_stats.clear()
 
     def on_validation_epoch_end(self) -> None:
-        self._val_stats = [numpy.concatenate(x, 0) for x in zip(*self._val_stats)]
-        tp, fp, p, r, f1, ap, auroc, fpr95, threshold, conf_auroc, conf_fpr95, conf_thr = ap_per_class(self._val_stats)
-        ap50, ap95, ap = ap[:, 0], ap[:, -1], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-        mp, mr, map50, map95, map, auroc = p.mean(), r.mean(), ap50.mean(), ap95.mean(), ap.mean(), auroc
+        for dataloader_idx, stats in self._val_stats.items():
+            stats = [numpy.concatenate(x, 0) for x in zip(*stats)]
+            tp, fp, p, r, f1, ap, auroc, fpr95, threshold, conf_auroc, conf_fpr95, conf_thr = ap_per_class(stats)
+            ap50, ap95 = ap[:, 0], ap[:, -1]  # AP@0.5, AP@0.5:0.95
+            mr, map50, map95 = r.mean(), ap50.mean(), ap95.mean()
 
-        # Print results
-        print(f"map50 = {map50:.2%}, map = {map:.2%}, 召回率 = {mr:.2%}")
-        print(f"AUROC = {auroc:.2} FPR95={fpr95:.2}, threshold={threshold:.4}")
-        self.log_dict({"map50": map50, "map": map, "recall": mr, "auroc": auroc, "fpr95": fpr95, "conf_auroc": conf_auroc, "conf_fpr95": conf_fpr95})
+            summary = dict(map50=map50, map95=map95, recall=mr, auroc=auroc, fpr95=fpr95, conf_auroc=conf_auroc,
+                           conf_fpr95=conf_fpr95)
+            summary = {f"{k}.{dataloader_idx}": v for k, v in summary.items()}
+
+            self.log_dict(summary)
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         img, target = batch
 
         img = torch.from_numpy(img).to(self.device, non_blocking=True).float() / 255
 
-        batched_labels = numpy.concatenate((target[:, 1:2], bbox_ratio2pixel(target[:, 2:], img.shape)), axis=-1)
-
         backbone_output = self.yolo.backbone(img)
         bbox_conf_logit = self.yolo.detect.inference_post_process(self.yolo.detect(backbone_output))
         ood_scores = self.vos_detect.inference_post_process(self.vos_detect(backbone_output))
         prediction = non_max_suppression(torch.cat((bbox_conf_logit, ood_scores), dim=-1), self.yolo.detect.nc, 1)
-        
-        for i, batch_p in enumerate(prediction):  # 遍历每一张图的结果
-            batch_p = batch_p.numpy(force=True)
-            # 取得对应batch的正确label
-            labels = batched_labels[target[:, 0] == i]
 
-            # 检测结果实际上分三类：正确匹配的正样本，没有被匹配的正样本，误识别的负样本
-            # 在进行OOD检测时需要区分这三种样本
+        stats = match_nms_prediction(prediction, target, img.shape, ood_score_pos=-1)
+        self._val_stats[dataloader_idx].extend(stats)
 
-            nl, npr = labels.shape[0], batch_p.shape[0]  # number of labels, predictions
 
-            if npr == 0:
-                # 没有预测任何东西
-                if nl != 0:  # 但是实际上有东西
-                    correct = numpy.zeros([nl, self._val_niou], dtype=bool)  # 全错
-                    # 没有被匹配的正样本
-                    self._val_stats.append((correct, *numpy.zeros([3, nl]), labels[:, 0]))
-
-            else:
-                if nl != 0:  # 实际上也有东西，这个时候才需要进行判断
-                    # 可能产生三种样本
-                    correct = process_batch(batch_p, labels, self._val_iouv)
-                else:
-                    # 误识别的负样本
-                    correct = numpy.zeros([npr, self._val_niou], dtype=bool)  # 全错
-
-                conf = batch_p[:, 4]
-                cls = batch_p[:, 10]
-                self._val_stats.append((correct, conf, conf, cls, labels[:, 0]))
         pass
-
 
     def collect_features(self, train_dataloader: DataLoader):
         """

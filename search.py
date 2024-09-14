@@ -16,7 +16,6 @@ from safe.safe_method import ExtractFeatureDatabase
 from safe.mlp import MLP, train_mlp
 from yolo.validation import process_batch
 from yolo.Network import FeatureExporter, BackBone, Conv, FeatureConcat, Yolo
-from yolo.non_max_suppression import non_max_suppression
 
 
 class ExtractAll:
@@ -63,7 +62,7 @@ class DetectedDataset:
 
     @staticmethod
     def load(path):
-        data = torch.load(path, weights_only=True)
+        data = torch.load(path, weights_only=False)
         return DetectedDataset(data["tp"], data["conf"], data["ood_features"])
 
 
@@ -204,45 +203,13 @@ def train_mlp_from_features(
     return mlp, mlp_acc
 
 
-def search_single_layers(
-        feature_data: DetectedDataset,
-        feature_database: ExtractFeatureDatabase,
-        attacker_name: str,
-        summary_path: str,
-        epoch: int,
-        device: torch.device):
-    """
-    搜索所有的单层
-    """
-    results = []
-    for layer_name in feature_data.ood_features.keys():
-        # train
-        mlp_network, mlp_acc = train_mlp_from_features(
-            [layer_name],
-            feature_database,
-            attacker_name,
-            epoch, device
-        )
-        # val
-        auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
-
-        print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
-        results.append((layer_name, auroc, fpr95))
-
-    os.makedirs(os.path.dirname(summary_path), exist_ok=True)
-    with open(summary_path, "w") as f:
-        f.write(f"{'name'},{'auroc'},{'fpr95'}\n")
-        for name, auroc, fpr95 in results:
-            f.write(f"{name},{auroc},{fpr95}\n")
-
-
-def search_multi_layers(name_set_list: list[set],
-                        feature_data: DetectedDataset,
-                        feature_database: ExtractFeatureDatabase,
-                        attacker_name: str,
-                        summary_path: str,
-                        epoch: int,
-                        device: torch.device):
+def search_layers(name_set_list: list[set],
+                  feature_data: DetectedDataset,
+                  feature_database: ExtractFeatureDatabase,
+                  attacker_name: str,
+                  summary_path: str,
+                  epoch: int,
+                  device: torch.device):
     """
     搜索指定的特征策略
     """
@@ -258,6 +225,7 @@ def search_multi_layers(name_set_list: list[set],
             for layer in layer_order:
                 if layer in name_set:
                     name_list.append(layer)
+            assert len(name_set) == len(name_list)
 
             mlp_network, mlp_acc = train_mlp_from_features(
                 name_list,

@@ -3,11 +3,11 @@ import functools
 import numpy
 import torch
 from torch.nn import Module
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 import einops
 import pytorch_lightning
 
-from yolo import loss
+from yolo import yolo_loss
 from yolo.non_max_suppression import non_max_suppression
 from yolo.validation import match_nms_prediction, ap_per_class
 
@@ -292,15 +292,15 @@ _ANCHORS = [
 class Yolo(pytorch_lightning.LightningModule):
     backbone: BackBone
     detect: Detect
-    loss_func: loss.ComputeLoss
+    loss_func: yolo_loss.ComputeLoss
 
     def __init__(self, num_class: int):
         super(Yolo, self).__init__()
-        self._val_stats = []
+        self._val_stats = defaultdict(list)
 
         self.backbone = BackBone()
         self.detect = Detect(nc=num_class, anchors=_ANCHORS, ch=[128, 256, 512])
-        self.loss_func = loss.ComputeLoss(num_class, _ANCHORS, self.detect.anchors)
+        self.loss_func = yolo_loss.ComputeLoss(num_class, _ANCHORS, self.detect.anchors)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x17, x20, x23 = self.backbone(x)
@@ -341,22 +341,25 @@ class Yolo(pytorch_lightning.LightningModule):
     def on_validation_epoch_start(self) -> None:
         self._val_stats.clear()
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch, batch_idx, dataloader_idx=0):
         img, target = batch
         img = torch.from_numpy(img).to(self.device, non_blocking=True).float() / 255
 
         prediction = self.inference(img)
         stats = match_nms_prediction(prediction, target, img.shape)
-        self._val_stats.extend(stats)
+        self._val_stats[dataloader_idx].extend(stats)
 
     def on_validation_epoch_end(self):
-        stats = [numpy.concatenate(x, 0) for x in zip(*self._val_stats)]
-        tp, fp, p, r, f1, ap, auroc, fpr95, threshold, conf_auroc, conf_fpr95, conf_thr = ap_per_class(stats)
-        ap50, ap95= ap[:, 0], ap[:, -1]  # AP@0.5, AP@0.5:0.95
-        mr, map50, map95 = r.mean(), ap50.mean(), ap95.mean()
+        for dataloader_idx, stats in self._val_stats.items():
+            stats = [numpy.concatenate(x, 0) for x in zip(*stats)]
+            tp, fp, p, r, f1, ap, auroc, fpr95, threshold, conf_auroc, conf_fpr95, conf_thr = ap_per_class(stats)
+            ap50, ap95 = ap[:, 0], ap[:, -1]  # AP@0.5, AP@0.5:0.95
+            mr, map50, map95 = r.mean(), ap50.mean(), ap95.mean()
 
-        # Print results
-        self.log_dict(dict(map50=map50, map95=map95, recall=mr, conf_auroc=conf_auroc, conf_fpr95=conf_fpr95))
+            summary = dict(map50=map50, map95=map95, recall=mr, conf_auroc=conf_auroc, conf_fpr95=conf_fpr95)
+            summary = {f"{k}.{dataloader_idx}": v for k, v in summary.items()}
+
+            self.log_dict(summary)
 
 
 if __name__ == '__main__':

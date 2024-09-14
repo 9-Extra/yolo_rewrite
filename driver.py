@@ -3,27 +3,51 @@ import os.path
 import sys
 from typing import Sequence
 
-import safe
-from dataset.h5Dataset import H5DatasetYolo
-from safe.attack import FSGMAttack, PDGAttack
 from scheduler import Target
 from schedules.schedule import Config
-import yolo_train
-import search
 import scheduler
 
 config = Config()
 
 
 @Target()
-def target_train():
-    yolo_train.main(config)
+def _yolo_train():
+    import yolo_train
+    yolo_train.train(config)
 
 
-@Target(target_train)
+@Target(_yolo_train)
+def _yolo_val():
+    import yolo_train
+    yolo_train.val(config)
+
+
+@Target(_yolo_train)
+def _safe_val():
+    import safe_val
+    data_paths = [
+        "run/preprocess/drone_train.h5",
+        "run/preprocess/drone_val.h5",
+        "run/preprocess/drone_test.h5",
+        "run/preprocess/drone_test_with_bird.h5",
+        "run/preprocess/drone_test_with_coco.h5"
+    ]
+    safe_val.main(config, data_paths)
+
+
+@Target(_yolo_train)
+def _vos_finetune():
+    import vos_finetune
+    vos_finetune.vos_finetune_val(config)
+
+
+@Target(_yolo_train)
 def target_collect_result():
     if os.path.exists(config.file_detected_dataset):
         return
+
+    from dataset.h5Dataset import H5DatasetYolo
+    import search
 
     network = config.trained_yolo_network
     network.to(config.device, non_blocking=True)
@@ -36,6 +60,11 @@ def target_collect_result():
 
 @Target(target_collect_result)
 def target_search_layer():
+    from safe.attack import FSGMAttack, PDGAttack
+    from dataset.h5Dataset import H5DatasetYolo
+    import search
+    import safe
+
     print("开始尝试每一层")
 
     network = config.trained_yolo_network
@@ -55,17 +84,24 @@ def target_search_layer():
     safe.safe_method.extract_features_h5(network, feature_name_set, train_dataset, attackers,
                                          config.h5_extract_features)
 
+    name_set_list = [{layer_name} for layer_name in feature_name_set]  # 所有的单层
     for attacker in attackers:
-        search.search_single_layers(config.detected_result_dataset,
-                                    config.extract_features_database,
-                                    attacker.name,
-                                    f"run/summary/single_layer_search_{attacker.name}.csv",
-                                    15,
-                                    config.device)
+        search.search_layers(
+            name_set_list,
+            config.detected_result_dataset,
+            config.extract_features_database,
+            attacker.name,
+            f"run/summary/single_layer_search_{attacker.name}.csv",
+            15,
+            config.device
+        )
 
 
 @Target(target_collect_result)
 def search_combine_layer():
+    from safe.attack import FSGMAttack, PDGAttack
+    import search
+
     print("尝试策略")
 
     attackers = [FSGMAttack(e) for e in (0.05, 0.06, 0.07, 0.08, 0.09, 0.1)]
@@ -77,7 +113,7 @@ def search_combine_layer():
                      ]
 
     for attacker in attackers:
-        search.search_multi_layers(
+        search.search_layers(
             name_set_list,
             config.detected_result_dataset,
             config.extract_features_database,
@@ -90,6 +126,10 @@ def search_combine_layer():
 
 @Target(target_collect_result)
 def mult_epsilon_compare():
+    from safe.attack import FSGMAttack, PDGAttack
+    from dataset.h5Dataset import H5DatasetYolo
+    import safe, search
+
     network = config.trained_yolo_network
     network.to(config.device, non_blocking=True)
 
@@ -104,34 +144,26 @@ def mult_epsilon_compare():
         *(PDGAttack(e, 10) for e in (0.005, 0.01, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1))
     ]
 
-
     safe.safe_method.extract_features_h5(network, feature_name_set, train_dataset, attackers,
-                                             config.h5_extract_features)
+                                         config.h5_extract_features)
 
     for attacker in attackers:
         @Target(name=f"mult_epsilon_compare.val_{attacker.name}")
         def val():
-            search.search_multi_layers(name_set_list,
-                                       config.detected_result_dataset,
-                                       config.extract_features_database,
-                                       attacker.name,
-                                       f"run/summary/multi_layer_search_{attacker.name}.csv",
-                                       30,
-                                       config.device)
+            search.search_layers(name_set_list,
+                                 config.detected_result_dataset,
+                                 config.extract_features_database,
+                                 attacker.name,
+                                 f"run/summary/multi_layer_search_{attacker.name}.csv",
+                                 30,
+                                 config.device)
 
         scheduler.run_target(val)
 
 
-# def configure_inject(binder: inject.Binder):
-#     binder.bind_to_constructor(yolo.Network.Yolo, config.trained_yolo_network)
-#     binder.bind(AttackMethod, config.attack_method)
-
-
 class WindowsInhibitor:
-    """Prevent OS sleep/hibernate in windows; code from:
-    https://github.com/h3llrais3r/Deluge-PreventSuspendPlus/blob/master/preventsuspendplus/core.py
-    API documentation:
-    https://msdn.microsoft.com/en-us/library/windows/desktop/aa373208(v=vs.85).aspx
+    """
+    Prevent OS sleep/hibernate in windows
     """
     ES_CONTINUOUS = 0x80000000
     ES_SYSTEM_REQUIRED = 0x00000001
@@ -158,12 +190,12 @@ class WindowsInhibitor:
 def _run_targets(names: Sequence[str]):
     targets = []
     unknown_targets = []
-    for name in args.items:
-        target_func = scheduler.get_target_by_name(name)
-        if target_func is None:
-            unknown_targets.append(name)
+    for name in names:
+        t = scheduler.get_target_by_name(name)
+        if t is not None:
+            targets.append(t)
         else:
-            targets.append(target_func)
+            unknown_targets.append(name)
 
     if len(unknown_targets) != 0:
         raise RuntimeError(f"存在未知目标: {unknown_targets}")
@@ -174,6 +206,7 @@ def _run_targets(names: Sequence[str]):
             scheduler.run_target(t)
 
     print("Done!")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("调用一些乱七八糟的方法")
@@ -200,3 +233,5 @@ if __name__ == '__main__':
             print('错误：run 命令需要至少一个项目名称。')
         else:
             _run_targets(args.items)
+    else:
+        parser.print_help()

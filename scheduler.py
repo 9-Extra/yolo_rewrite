@@ -101,11 +101,11 @@ def virtual_run_target(target: TargetFunction):
 def get_target_by_name(name: str) -> Optional[TargetFunction]:
     global _context
     for func, target in _context.targets.items():
-        if target.name == name:
+        if target.name == name or target.name == "_" + name:
             return func
 
     return None
 
 def get_target_names() -> list[str]:
     global _context
-    return [target.name for target in _context.targets.values()]
+    return [target.name.removeprefix("_") for target in _context.targets.values()]
