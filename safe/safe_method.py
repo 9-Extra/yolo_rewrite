@@ -11,6 +11,7 @@ from rich.progress import Progress, BarColumn, TaskProgressColumn, TextColumn, T
 
 import yolo
 from dataset.h5Dataset import H5DatasetYolo
+from yolo.validation import match_nms_prediction_fp_only
 from .FeatureExtract import FeatureExtract
 from .attack import Attacker
 
@@ -197,17 +198,20 @@ def extract_features_h5(network: yolo.Network.Yolo,
     ) as process:
         for i, (img, target) in enumerate(process.track(train_loader, len(train_loader), description="收集特征")):
             img = torch.from_numpy(img).to(device, non_blocking=True).float() / 255
-            target = torch.from_numpy(target).to(device, non_blocking=True)
+            target_tensor = torch.from_numpy(target).to(device, non_blocking=True)
 
-            attack_samples = [attacker(network, img, target) for attacker in attackers]
+            attack_samples = [attacker(network, img, target_tensor) for attacker in attackers]
 
             feature_extractor.attach(network)
             # 正样本
             feature_extractor.ready()
             prediction = network.inference(img)
+
+            correct = match_nms_prediction_fp_only(prediction, target, img.shape)
+            for i in range(len(prediction)):
+                prediction[i] = prediction[i][correct[i]]  # 只将正确识别的对象作为正样本
+
             feature_dict = feature_roi_flatten(feature_extractor.get_features(), prediction)
-
-
 
             saver.save_positive_feature(feature_dict)
 

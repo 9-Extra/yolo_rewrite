@@ -195,8 +195,8 @@ def process_batch(detections, labels, iouv):
 
     # correct中的每一行为一个检测结果
     # 如果其中存在True说明匹配上了，是TP
-    # 如果全为False说明是FP，误识别
-    # 没有检测到的正确结果实际上漏掉了没有统计
+    # 如果全为False说明是FP，类型误识别，或者OOD
+    # 没有检测到的正确结果逻辑不写在此函数中
 
     return correct
 
@@ -268,5 +268,53 @@ def match_nms_prediction(
             ood_score = batch_p[:, ood_score_pos]
 
             stats.append((correct, conf, ood_score, cls, labels[:, 0]))  # (correct, conf, ood_score, pcls, tcls)
+
+    return stats
+
+
+def match_nms_prediction_fp_only(
+        prediction: list[torch.Tensor],
+        target: numpy.ndarray,
+        img_shape: torch.Size,
+        ):
+    """
+    将经过NMS后的预测结果与目标进行匹配，但是检出误识别样本，不考虑漏掉的，不处理ood_score
+    :param prediction: non_max_suppression()或者Yolo.inference()的输出
+    :param target: H5DatasetYolo输出的targets，迭代时输出元组的第[1]个
+    :param img_shape: 图像大小
+    :return:
+    """
+    iouv = numpy.array([0.5])  # 考虑iou为0.5的宽松情况
+    niou = iouv.size
+
+    stats = []
+
+    batched_labels = numpy.concatenate((target[:, 1:2], bbox_ratio2pixel(target[:, 2:], img_shape)), axis=-1)
+
+    for i, batch_p in enumerate(prediction):  # 遍历每一张图的结果
+        batch_p = batch_p.numpy(force=True)
+        # 取得对应batch的正确label
+        labels = batched_labels[target[:, 0] == i]
+
+        # 检测结果实际上分三类：正确匹配的正样本，没有被匹配的正样本，误识别的负样本
+        # 在进行OOD检测时需要区分这三种样本
+
+        nl, npr = labels.shape[0], batch_p.shape[0]  # number of labels, predictions
+
+        if npr != 0:
+            if nl != 0:  # 实际上也有东西，这个时候才需要进行判断
+                # 可能产生三种样本
+                correct = process_batch(batch_p, labels, iouv)
+            else:
+                # 误识别的负样本
+                correct = numpy.zeros([npr, niou], dtype=bool)  # 全错
+
+            assert correct.shape[-1] == 1
+
+            # 如果correct为True则是正确识别的样本，反之为类型误识别或者OOD样本
+            stats.append(correct[:, 0])
+        else:
+            stats.append(numpy.empty(0)) # 此图像没有检测结果，用空结果占位
+
 
     return stats

@@ -242,6 +242,9 @@ class VosYolo(pytorch_lightning.LightningModule):
 
         loss = yolo_loss + vos_loss * self.loss_weight
 
+        self.log("yolo_loss", yolo_loss)
+        self.log("vos_loss", vos_loss)
+
         self.log("train_loss", loss)
 
         return yolo_loss

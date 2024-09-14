@@ -141,7 +141,7 @@ def main(config: Config, data_paths: Sequence[str]):
 if __name__ == '__main__':
     config = Config()
     data_paths = [
-        "run/preprocess/drone_train.h5",
+        # "run/preprocess/drone_train.h5",
         "run/preprocess/drone_val.h5",
         "run/preprocess/drone_test.h5",
         "run/preprocess/drone_test_with_bird.h5",

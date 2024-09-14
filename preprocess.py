@@ -151,6 +151,6 @@ if __name__ == '__main__':
     print("Coco中鸟图像数=", len(coco_bird))
     raw_dataset2h5("./run/preprocess/drone_test_with_coco.h5", mix_raw_dataset([drone_test, coco_bird]))
 
-    bird = BirdVSDroneBird(os.path.join(r"G:/datasets/BirdVsDrone", "Birds"))
+    bird = BirdVSDroneBird(os.path.join(drone_vs_bird_dir, "Birds"))
     print("鸟图像数=", len(bird))
     raw_dataset2h5("./run/preprocess/drone_test_with_bird.h5", mix_raw_dataset([drone_test, bird]))
