@@ -74,7 +74,7 @@ def display(img, objs, label_names):
 
 
 def process_data(origin_img: str, objs: list, target_size: tuple[int, int]):
-    origin_img = cv2.imread(origin_img)
+    origin_img: numpy.ndarray = cv2.imread(origin_img)
     img, ratio, (top, left) = letterbox_fixed_size(origin_img, target_size)
     mapped_objs = numpy.empty((len(objs), 5), dtype=numpy.float32)
     for i, obj in enumerate(objs):
@@ -98,7 +98,7 @@ def raw_dataset2h5(dist: str, data: RawDataset, skip_if_exist: bool = True):
         print(f"Skip {dist} since it exists.")
         return
     os.makedirs(os.path.dirname(dist), exist_ok=True)
-    target_size = [640, 640]
+    target_size = (640, 640)
 
     process = functools.partial(process_data, target_size=target_size)
 

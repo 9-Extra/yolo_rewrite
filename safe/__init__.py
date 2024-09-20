@@ -1,2 +1,1 @@
-import safe.safe_method
-import safe.FeatureExtract
+__all__ = ["safe_method", "FeatureExtract"]

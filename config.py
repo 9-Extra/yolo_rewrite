@@ -8,10 +8,9 @@ AttackMethod = Literal["pgd", "fgsm"]
 
 class Config:
     device = torch.device("cuda")
-    torch.backends.cudnn.benchmark = True
-
     # yolo
     num_class = 1
+    batch_size = 8
     dir_checkpoint = "run/weight"
     file_train_dataset = "run/preprocess/drone_train.h5"
     file_val_dataset = "run/preprocess/drone_val.h5"
@@ -20,7 +19,7 @@ class Config:
 
     @cached_property
     def trained_yolo_network(self):
-        from yolo.Network import Yolo
+        from yolo import Yolo
         network = Yolo(self.num_class)
         network.load_state_dict(torch.load(self.file_yolo_weight, weights_only=True))
         # network = torch.compile(network)
@@ -38,17 +37,7 @@ class Config:
         import search
         return search.DetectedDataset.load(self.file_detected_dataset)
 
-    # extract_feature
-    # dir_extract_features = "run/extract_features"
-    # attack_method: AttackMethod = "fgsm"
-
     # attack
     h5_extract_features = "run/extract_features.h5"
-
-    @property
-    def extract_features_database(self):
-        from search import ExtractFeatureDatabase
-        return ExtractFeatureDatabase(self.h5_extract_features)
-
     # vos
     file_vos_yolo_weight = "run/weight/vos_yolo.pth"

@@ -33,7 +33,7 @@ class Target:
 
     def __init__(self, *dependence: TargetFunction, name: Optional[str] = None):
         self.dependence = dependence
-        self.name = name
+        self.name = name # type: ignore
 
     def __call__(self, func: TargetFunction):
         if self.name is None:
@@ -69,12 +69,12 @@ def run_target(target: TargetFunction):
     execute = _dependency_solve(target)
 
     for func in execute:
-        target = _context.targets[func]
-        if target.name not in _context.state["completed"]:
-            _context.on_target_start(target)
-            print(f"Running Target: {target.name}")
+        target_reg = _context.targets[func]
+        if target_reg.name not in _context.state["completed"]:
+            _context.on_target_start(target_reg)
+            print(f"Running Target: {target_reg.name}")
             func()
-            _context.on_target_complete(target)
+            _context.on_target_complete(target_reg)
 
 
 def re_run_target(target: TargetFunction):

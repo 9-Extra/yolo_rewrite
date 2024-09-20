@@ -7,7 +7,7 @@ from pytorch_lightning.loggers import TensorBoardLogger, CSVLogger
 from torch.utils.data import DataLoader
 
 from dataset.h5Dataset import H5DatasetYolo
-from schedules.schedule import Config
+from config import Config
 from vos.vos_yolo import VosYolo
 
 

@@ -254,7 +254,7 @@ class VosYolo(pytorch_lightning.LightningModule):
         return super().to(*args, **kwargs)
 
     def on_train_start(self) -> None:
-        self.collect_features(self.trainer.train_dataloader)
+        self.collect_features(self.trainer.train_dataloader) # type: ignore
 
     def on_validation_epoch_start(self) -> None:
         self._val_stats.clear()

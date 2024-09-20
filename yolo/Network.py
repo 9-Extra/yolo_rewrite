@@ -58,11 +58,11 @@ class Conv(Module):
         return self.act(self.norm(self.conv(x)))
 
     @staticmethod
-    def _auto_pad(k, d=1):  # kernel, padding, dilation
+    def _auto_pad(k: int | tuple[int, int], d=1):  # kernel, padding, dilation
         # Pad to 'same' shape outputs
         if d > 1:
-            k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
-        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
+            k = d * (k - 1) + 1 if isinstance(k, int) else (d * (k[0] - 1) + 1, d * (k[1] - 1) + 1)  # actual kernel-size
+        p = k // 2 if isinstance(k, int) else (k[0] // 2, k[1] // 2)  # auto-pad
         return p
 
 
@@ -326,7 +326,7 @@ class Yolo(pytorch_lightning.LightningModule):
         return non_max_suppression(raw_result, self.detect.nc)
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters())
+        return torch.optim.Adam(self.parameters()) # type: ignore
 
     def training_step(self, batch, batch_idx):
         img, target = batch

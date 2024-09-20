@@ -5,7 +5,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, RichModelSummary, RichP
 from pytorch_lightning.loggers import TensorBoardLogger, CSVLogger
 
 from yolo.Network import Yolo
-from schedules.schedule import Config
+from config import Config
 import torch
 from torch.utils.data import DataLoader
 
@@ -48,13 +48,12 @@ def train(config: Config, skip_if_exists: bool = True):
         print("Weight exists. Skip yolo training.")
         return
 
-    batch_size = 8
     num_class = config.num_class
     network = Yolo(num_class)
     # network = torch.compile(network, backend="cudagraphs")
 
     train_dataloader = DataLoader(H5DatasetYolo(config.file_train_dataset),
-                                  batch_size=batch_size,
+                                  batch_size=config.batch_size,
                                   shuffle=True,
                                   num_workers=0,
                                   pin_memory=True,
@@ -62,7 +61,7 @@ def train(config: Config, skip_if_exists: bool = True):
                                   )
 
     val_dataloader = DataLoader(H5DatasetYolo(config.file_val_dataset),
-                                batch_size=batch_size,
+                                batch_size=config.batch_size,
                                 shuffle=False,
                                 num_workers=0,
                                 pin_memory=True,
@@ -82,12 +81,11 @@ pass
 def val(config: Config):
     torch.set_float32_matmul_precision('medium')
 
-    batch_size = 8
     num_class = config.num_class
     network = Yolo(num_class)
     # network = torch.compile(network, backend="cudagraphs")
     val_dataloader = DataLoader(H5DatasetYolo(config.file_val_dataset),
-                                batch_size=batch_size,
+                                batch_size=config.batch_size,
                                 shuffle=False,
                                 num_workers=0,
                                 pin_memory=True,

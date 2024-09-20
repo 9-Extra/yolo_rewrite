@@ -3,8 +3,11 @@ import os.path
 import sys
 from typing import Sequence
 
+from safe import safe_method
+from safe.safe_method import ExtractFeatureDatabase
+import safe.safe_method
 from scheduler import Target
-from schedules.schedule import Config
+from config import Config
 import scheduler
 
 config = Config()
@@ -81,7 +84,7 @@ def target_search_layer():
     feature_name_set = search.ExtractAll().get_name_set(network)
     print(f"共提取{len(feature_name_set)}层的特征")
 
-    safe.safe_method.extract_features_h5(network, feature_name_set, train_dataset, attackers,
+    safe_method.extract_features_h5(network, feature_name_set, train_dataset, attackers,
                                          config.h5_extract_features)
 
     name_set_list = [{layer_name} for layer_name in feature_name_set]  # 所有的单层
@@ -89,7 +92,7 @@ def target_search_layer():
         search.search_layers(
             name_set_list,
             config.detected_result_dataset,
-            config.extract_features_database,
+            ExtractFeatureDatabase(config.h5_extract_features),
             attacker.name,
             f"run/summary/single_layer_search_{attacker.name}.csv",
             15,
@@ -116,7 +119,7 @@ def search_combine_layer():
         search.search_layers(
             name_set_list,
             config.detected_result_dataset,
-            config.extract_features_database,
+            ExtractFeatureDatabase(config.h5_extract_features),
             attacker.name,
             f"run/summary/multi_layer_search_{attacker.name}.csv",
             15,
@@ -143,8 +146,8 @@ def mult_epsilon_compare():
         # *(PDGAttack(e, 20) for e in (0.005, 0.006, 0.007)),
         *(PDGAttack(e, 10) for e in (0.005, 0.01, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1))
     ]
-
-    safe.safe_method.extract_features_h5(network, feature_name_set, train_dataset, attackers,
+    
+    safe_method.extract_features_h5(network, feature_name_set, train_dataset, attackers,
                                          config.h5_extract_features)
 
     for attacker in attackers:
@@ -152,7 +155,7 @@ def mult_epsilon_compare():
         def val():
             search.search_layers(name_set_list,
                                  config.detected_result_dataset,
-                                 config.extract_features_database,
+                                 ExtractFeatureDatabase(config.h5_extract_features),
                                  attacker.name,
                                  f"run/summary/multi_layer_search_{attacker.name}.csv",
                                  30,

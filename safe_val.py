@@ -9,16 +9,17 @@ from rich.progress import track
 from torch.utils.data import Dataset, DataLoader
 
 import safe
+import safe.safe_method
 import search
 import yolo.Network
 from safe.FeatureExtract import FeatureExtract
-from safe.safe_method import feature_roi_flatten
+from safe.safe_method import ExtractFeatureDatabase, feature_roi_flatten
 from yolo.Network import Yolo
 from dataset.h5Dataset import H5DatasetYolo
 
 from safe.attack import FSGMAttack
 from safe.mlp import MLP
-from schedules.schedule import Config
+from config import Config
 from yolo.validation import match_nms_prediction, ap_per_class
 
 
@@ -96,6 +97,7 @@ def main(config: Config, data_paths: Sequence[str]):
         # *(PDGAttack(e, 20) for e in (0.005, 0.006, 0.007)),
         # PDGAttack(0.006, 20)
     ]
+    
 
     safe.safe_method.extract_features_h5(
         network,
@@ -109,7 +111,7 @@ def main(config: Config, data_paths: Sequence[str]):
     for attacker in attackers:
         mlp, _ = search.train_mlp_from_features(
             layer_name_list,
-            config.extract_features_database,
+            ExtractFeatureDatabase(config.h5_extract_features),
             attacker.name,
             40,
             config.device

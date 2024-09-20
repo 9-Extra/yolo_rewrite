@@ -1,1 +1,2 @@
-__all__ = ["yolo_loss.py", "Network"]
+__all__ = ["yolo_loss", "Network"]
+from .Network import Yolo

@@ -8,7 +8,7 @@ import torchvision
 from rich.progress import track
 from sklearn import metrics
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 
 from dataset.h5Dataset import H5DatasetYolo
 from safe.FeatureExtract import FeatureExtract
@@ -128,7 +128,7 @@ def collect_stats_and_feature(network: Yolo, val_dataset: H5DatasetYolo):
                 for name, feature in feature_extractor.get_features().items():
                     b, c, h, w = feature.shape
 
-                    relative_feature = torchvision.ops.roi_align(feature, batch_bbox, (2, 2), w)
+                    relative_feature = torchvision.ops.roi_align(feature, batch_bbox, (2, 2), w) # type: ignore
                     ood_feature_collect.setdefault(name, []).append(relative_feature.flatten(start_dim=1))  # 保留第0维
 
                 stats.append((correct, conf))
@@ -193,7 +193,7 @@ def train_mlp_from_features(
     y[0:x.shape[0] // 2] = 1  # 前一半为正样本
     del pos, neg
 
-    dataset = torch.utils.data.TensorDataset(x, y)
+    dataset = TensorDataset(x, y)
     feature_dim = x.shape[1]
 
     mlp = MLP(feature_dim, layer_name_list)

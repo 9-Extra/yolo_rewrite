@@ -66,7 +66,7 @@ def compute_ap(recall, precision):
     method = "continuous"  # methods: 'continuous', 'interp'
     if method == "interp":
         x = numpy.linspace(0, 1, 101)  # 101-point interp (COCO)
-        ap = numpy.trapz(numpy.interp(x, mrec, mpre), x)  # integrate
+        ap = numpy.trapezoid(numpy.interp(x, mrec, mpre), x)  # integrate
     else:  # 'continuous'
         i = numpy.where(mrec[1:] != mrec[:-1])[0]  # points where x axis (recall) changes
         ap = numpy.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])  # area under curve
