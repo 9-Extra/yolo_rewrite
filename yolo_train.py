@@ -83,6 +83,7 @@ def val(config: Config):
 
     num_class = config.num_class
     network = Yolo(num_class)
+    network.load_state_dict(torch.load(config.file_yolo_weight, weights_only=True))
     # network = torch.compile(network, backend="cudagraphs")
     val_dataloader = DataLoader(H5DatasetYolo(config.file_val_dataset),
                                 batch_size=config.batch_size,

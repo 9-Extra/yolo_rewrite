@@ -1,111 +1,128 @@
 from collections.abc import Callable
-from typing import Optional, Literal
+from typing import Optional
 
 TargetFunction = Callable[[], None]
+TargetIndex = TargetFunction | str # 可以使用名称或者函数本身找到目标对象
 
 
 class _Context:
-    state: dict[Literal["running", "completed"], set[str]]
-    targets: dict[TargetFunction, "Target"]
+    completed: set["Target"]
+    targets: dict[str, "Target"]
+    targets_from_func: dict[TargetFunction, "Target"]
 
     def __init__(self):
         self.targets = {}
-        self.state = {"running": set(), "completed": set()}
+        self.targets_from_func = {}
+        self.completed = set()
 
-    def register_target(self, func: TargetFunction, target: "Target"):
-        assert target.name not in self.targets
-        self.targets[func] = target
+    def register_target(self, target: "Target"):
+        assert target.name not in self.targets, f"{target.name}重复出现"
+        self.targets[target.name] = target
+        self.targets_from_func[target.func] = target
 
     def on_target_start(self, target: "Target"):
-        self.state["running"].add(target.name)
+        pass
 
     def on_target_complete(self, target: "Target"):
-        self.state["running"].remove(target.name)
-        self.state["completed"].add(target.name)
+        self.completed.add(target.name)
+        
+    def get_target(self, target_idx: TargetIndex):
+        if isinstance(target_idx, Callable):
+            return self.targets_from_func[target_idx]
+        elif isinstance(target_idx, str):
+            return self.targets[target_idx]
+        else:
+            raise TypeError(f"只能使用函数或者名称")
 
 
 _context = _Context()
 
 
 class Target:
+    func: TargetFunction
     name: str
-    dependence: tuple[TargetFunction, ...]
+    dependence: tuple[TargetIndex, ...]
 
-    def __init__(self, *dependence: TargetFunction, name: Optional[str] = None):
-        self.dependence = dependence
+    def __init__(self, *dependence: TargetIndex, name: Optional[str] = None):
+        self.dependence = dependence # type: ignore
         self.name = name # type: ignore
+        self.func = None # type: ignore
 
     def __call__(self, func: TargetFunction):
         if self.name is None:
             self.name = func.__name__
 
+        self.func = func
         global _context
-        _context.register_target(func, self)
+        _context.register_target(self)
 
         return func
 
 
-def _dependency_solve(target: TargetFunction) -> list[TargetFunction]:
+def _dependency_solve(target_idx: TargetIndex) -> list[Target]:
     global _context
-    visit_list = []
-    visited = set()
-    to_visit = [target]
+    visit_list: list[Target] = []
+    to_visit = [target_idx]
 
     while len(to_visit) != 0:
         to_visit_next = []
-        for target in to_visit:
-            if target not in visited:
-                visited.add(target)
-                visit_list.append(target)
-                to_visit_next.extend(_context.targets[target].dependence)
+        for t_id in to_visit:
+            t = _context.get_target(t_id)
+            if t not in visit_list:
+                visit_list.append(t)
+                to_visit_next.extend(t.dependence)
         to_visit = to_visit_next
 
     visit_list.reverse()  # 执行顺序与遍历顺序相反
     return visit_list
 
 
-def run_target(target: TargetFunction):
+def run_target(target_idx: TargetIndex):
     global _context
-    execute = _dependency_solve(target)
+    execute = _dependency_solve(target_idx)
 
-    for func in execute:
-        target_reg = _context.targets[func]
-        if target_reg.name not in _context.state["completed"]:
-            _context.on_target_start(target_reg)
-            print(f"Running Target: {target_reg.name}")
-            func()
-            _context.on_target_complete(target_reg)
+    for target in execute:
+        if target not in _context.completed:
+            _context.on_target_start(target)
+            print(f"Running Target: {target.name}")
+            target.func() # run
+            _context.on_target_complete(target)
 
 
-def re_run_target(target: TargetFunction):
+def re_run_target(target_idx: TargetIndex):
     global _context
-    execute = _dependency_solve(target)
+    execute = _dependency_solve(target_idx)
+    cur_target = _context.get_target(target_idx)
 
-    for func in execute:
-        target_info = _context.targets[func]
-        if target_info.name not in _context.state["completed"] or func is target:
-            _context.on_target_start(target_info)
-            print(f"Running Target: {target_info.name}")
-            func()
-            _context.on_target_complete(target_info)
+    for target in execute:
+        if target not in _context.completed or target is cur_target:
+            _context.on_target_start(target)
+            print(f"Running Target: {target.name}")
+            target.func() # run
+            _context.on_target_complete(target)
+            
+    
 
 
-def virtual_run_target(target: TargetFunction):
+def virtual_run_target(target_idx: TargetIndex):
     global _context
-    execute = _dependency_solve(target)
+    execute = _dependency_solve(target_idx)
 
-    for func in execute:
-        print(f"Run {_context.targets[func].name}")
+    for target in execute:
+        if target not in _context.completed:
+            print(f"Running Target: {target.name}")
+        else:
+            print(f"Skip Target: {target.name}")
 
 
-def get_target_by_name(name: str) -> Optional[TargetFunction]:
+def get_target_by_name(name: str) -> Optional[Target]:
     global _context
-    for func, target in _context.targets.items():
-        if target.name == name or target.name == "_" + name:
-            return func
+    for n, target in _context.targets.items():
+        if n == name or n == "_" + name:
+            return target
 
     return None
 
 def get_target_names() -> list[str]:
     global _context
-    return [target.name.removeprefix("_") for target in _context.targets.values()]
+    return [name.removeprefix("_") for name in _context.targets.keys()]

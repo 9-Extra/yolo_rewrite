@@ -9,11 +9,11 @@ from rich.progress import track
 from torch.utils.data import Dataset, DataLoader
 
 import safe
+from safe.feature_cache import ExtractFeatureDatabase
 import safe.safe_method
-import search
 import yolo.Network
 from safe.FeatureExtract import FeatureExtract
-from safe.safe_method import ExtractFeatureDatabase, feature_roi_flatten
+from safe.safe_method import feature_roi_flatten
 from yolo.Network import Yolo
 from dataset.h5Dataset import H5DatasetYolo
 
@@ -109,7 +109,7 @@ def main(config: Config, data_paths: Sequence[str]):
 
     summary_table = pandas.DataFrame(columns=['dataset', 'attacker', 'map50', 'map95', 'recall', 'auroc', 'fpr95', 'conf_auroc', 'conf_fpr95'])  # 收集结果
     for attacker in attackers:
-        mlp, _ = search.train_mlp_from_features(
+        mlp, _ = safe.safe_method.train_mlp_from_features(
             layer_name_list,
             ExtractFeatureDatabase(config.h5_extract_features),
             attacker.name,

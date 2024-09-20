@@ -1,11 +1,7 @@
 import argparse
-import os.path
 import sys
 from typing import Sequence
 
-from safe import safe_method
-from safe.safe_method import ExtractFeatureDatabase
-import safe.safe_method
 from scheduler import Target
 from config import Config
 import scheduler
@@ -44,127 +40,7 @@ def _vos_finetune():
     vos_finetune.vos_finetune_val(config)
 
 
-@Target(_yolo_train)
-def target_collect_result():
-    if os.path.exists(config.file_detected_dataset):
-        return
-
-    from dataset.h5Dataset import H5DatasetYolo
-    import search
-
-    network = config.trained_yolo_network
-    network.to(config.device, non_blocking=True)
-
-    val_dataset = H5DatasetYolo(config.file_detected_base_dataset)
-    print("样本数：", len(val_dataset))
-    result_dataset = search.collect_stats_and_feature(network, val_dataset)
-    result_dataset.save(config.file_detected_dataset)
-
-
-@Target(target_collect_result)
-def target_search_layer():
-    from safe.attack import FSGMAttack, PDGAttack
-    from dataset.h5Dataset import H5DatasetYolo
-    import search
-    import safe
-
-    print("开始尝试每一层")
-
-    network = config.trained_yolo_network
-    network.to(config.device, non_blocking=True)
-
-    attackers = [
-        FSGMAttack(0.08),
-        PDGAttack(0.006, 20),
-        # *(PDGAttack(e, 10) for e in (0.005, 0.01, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1))
-    ]
-
-    train_dataset = H5DatasetYolo(config.file_train_dataset)  # 从训练集前向传播过程中抽取特征，用于训练OOD检测用
-
-    feature_name_set = search.ExtractAll().get_name_set(network)
-    print(f"共提取{len(feature_name_set)}层的特征")
-
-    safe_method.extract_features_h5(network, feature_name_set, train_dataset, attackers,
-                                         config.h5_extract_features)
-
-    name_set_list = [{layer_name} for layer_name in feature_name_set]  # 所有的单层
-    for attacker in attackers:
-        search.search_layers(
-            name_set_list,
-            config.detected_result_dataset,
-            ExtractFeatureDatabase(config.h5_extract_features),
-            attacker.name,
-            f"run/summary/single_layer_search_{attacker.name}.csv",
-            15,
-            config.device
-        )
-
-
-@Target(target_collect_result)
-def search_combine_layer():
-    from safe.attack import FSGMAttack, PDGAttack
-    import search
-
-    print("尝试策略")
-
-    attackers = [FSGMAttack(e) for e in (0.05, 0.06, 0.07, 0.08, 0.09, 0.1)]
-
-    name_set_list = [*[{"backbone.inner.25"} for _ in range(3)],
-                     *[{"backbone.inner.25", "backbone.inner.21"} for _ in range(3)],
-                     *[{"backbone.inner.25", "backbone.inner.21", "backbone.inner.23.norm"} for _
-                       in range(3)],
-                     ]
-
-    for attacker in attackers:
-        search.search_layers(
-            name_set_list,
-            config.detected_result_dataset,
-            ExtractFeatureDatabase(config.h5_extract_features),
-            attacker.name,
-            f"run/summary/multi_layer_search_{attacker.name}.csv",
-            15,
-            config.device
-        )
-
-
-@Target(target_collect_result)
-def mult_epsilon_compare():
-    from safe.attack import FSGMAttack, PDGAttack
-    from dataset.h5Dataset import H5DatasetYolo
-    import safe, search
-
-    network = config.trained_yolo_network
-    network.to(config.device, non_blocking=True)
-
-    train_dataset = H5DatasetYolo(config.file_train_dataset)
-
-    feature_name_set = {"backbone.inner.25"}
-    name_set_list = [feature_name_set] * 3
-
-    attackers = [
-        # (FSGMAttack(e) for e in (0.05, 0.06, 0.07, 0.08, 0.09, 0.1)),
-        # *(PDGAttack(e, 20) for e in (0.005, 0.006, 0.007)),
-        *(PDGAttack(e, 10) for e in (0.005, 0.01, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1))
-    ]
-    
-    safe_method.extract_features_h5(network, feature_name_set, train_dataset, attackers,
-                                         config.h5_extract_features)
-
-    for attacker in attackers:
-        @Target(name=f"mult_epsilon_compare.val_{attacker.name}")
-        def val():
-            search.search_layers(name_set_list,
-                                 config.detected_result_dataset,
-                                 ExtractFeatureDatabase(config.h5_extract_features),
-                                 attacker.name,
-                                 f"run/summary/multi_layer_search_{attacker.name}.csv",
-                                 30,
-                                 config.device)
-
-        scheduler.run_target(val)
-
-
-class WindowsInhibitor:
+class Inhibitor:
     """
     Prevent OS sleep/hibernate in windows
     """
@@ -179,19 +55,20 @@ class WindowsInhibitor:
             import ctypes
             print("Preventing Windows from going to sleep")
             ctypes.windll.kernel32.SetThreadExecutionState(
-                WindowsInhibitor.ES_CONTINUOUS | \
-                WindowsInhibitor.ES_SYSTEM_REQUIRED)
+                Inhibitor.ES_CONTINUOUS | \
+                Inhibitor.ES_SYSTEM_REQUIRED)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if sys.platform == "win32":
             import ctypes
             print("Allowing Windows to go to sleep")
             ctypes.windll.kernel32.SetThreadExecutionState(
-                WindowsInhibitor.ES_CONTINUOUS)
+                Inhibitor.ES_CONTINUOUS)
 
+import search # 导入以注册search相关target
 
 def _run_targets(names: Sequence[str]):
-    targets = []
+    targets: list[Target] = []
     unknown_targets = []
     for name in names:
         t = scheduler.get_target_by_name(name)
@@ -204,9 +81,9 @@ def _run_targets(names: Sequence[str]):
         raise RuntimeError(f"存在未知目标: {unknown_targets}")
 
     print(f"Run targets {names}")
-    with WindowsInhibitor():
+    with Inhibitor():
         for t in targets:
-            scheduler.run_target(t)
+            scheduler.run_target(t.func)
 
     print("Done!")
 

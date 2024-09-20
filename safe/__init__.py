@@ -1,1 +1,1 @@
-__all__ = ["safe_method", "FeatureExtract"]
+__all__ = ["safe_method", "FeatureExtract", "feature_cache"]
