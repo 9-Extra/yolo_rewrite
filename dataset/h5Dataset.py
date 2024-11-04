@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 class H5DatasetYolo(Dataset):
     def __init__(self, path: str):
-        assert os.path.isfile(path)
+        assert os.path.isfile(path), f"数据集文件{path}没找到，得先预处理"
         
         self.h5f = h5py.File(path, "r")
         self.images: h5py.Dataset = self.h5f["image"]

@@ -20,9 +20,7 @@ class RichProgressBarTinkered(RichProgressBar):
         return items
 
 
-def _trainer(max_epochs: int, fast_dev_run: bool = False):
-
-    default_root_dir = "run"
+def _trainer(config: Config, fast_dev_run: bool = False):
 
     checkpoint = ModelCheckpoint(
         monitor="train_loss",
@@ -31,36 +29,30 @@ def _trainer(max_epochs: int, fast_dev_run: bool = False):
     )
 
     return pytorch_lightning.Trainer(
-        max_epochs=max_epochs,
+        max_epochs=config.yolo_train_epoch,
         precision="32-true",
         val_check_interval=0.1,
         callbacks=[RichProgressBarTinkered(leave=True), RichModelSummary(max_depth=3), checkpoint],
-        default_root_dir=default_root_dir,
-        logger=TensorBoardLogger(save_dir=default_root_dir, name="yolo_logs"),
+        default_root_dir=config.run_path,
+        logger=[
+            TensorBoardLogger(config.log_path, name="yolo_logs_tensorboard"), 
+            CSVLogger(config.log_path, name="yolo_logs_csv")
+            ],
         fast_dev_run=fast_dev_run,
         benchmark=True
     )
 
 
-def train(config: Config, skip_if_exists: bool = True):
+def train_val(config: Config, skip_train_if_exists: bool = True):
     torch.set_float32_matmul_precision('medium')
-    if skip_if_exists and os.path.isfile(config.file_yolo_weight):
-        print("Weight exists. Skip yolo training.")
-        return
-
+    
     num_class = config.num_class
     network = Yolo(num_class)
     # network = torch.compile(network, backend="cudagraphs")
+    
+    trainer = _trainer(config.yolo_train_epoch)
 
-    train_dataloader = DataLoader(H5DatasetYolo(config.file_train_dataset),
-                                  batch_size=config.batch_size,
-                                  shuffle=True,
-                                  num_workers=0,
-                                  pin_memory=True,
-                                  collate_fn=H5DatasetYolo.collate_fn
-                                  )
-
-    val_dataloader = DataLoader(H5DatasetYolo(config.file_val_dataset),
+    val_dataloader = DataLoader(H5DatasetYolo(config.yolo_val_dataset),
                                 batch_size=config.batch_size,
                                 shuffle=False,
                                 num_workers=0,
@@ -68,38 +60,39 @@ def train(config: Config, skip_if_exists: bool = True):
                                 collate_fn=H5DatasetYolo.collate_fn
                                 )
 
-    trainer = _trainer(config.yolo_epoch)
-    trainer.fit(model=network, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+    
+    if not (skip_train_if_exists and os.path.isfile(config.file_yolo_weight)):
+        # do train
+        train_dataloader = DataLoader(H5DatasetYolo(config.yolo_train_dataset),
+                                    batch_size=config.batch_size,
+                                    shuffle=True,
+                                    num_workers=0,
+                                    pin_memory=True,
+                                    collate_fn=H5DatasetYolo.collate_fn
+                                    )
 
-    if not trainer.interrupted: # 如果中断则不保存
+        trainer.fit(model=network, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)  
+
+        if trainer.interrupted: # 如果中断则不保存
+            exit(-1)
+        
         os.makedirs(os.path.dirname(config.file_yolo_weight), exist_ok=True)
         torch.save(network.state_dict(), config.file_yolo_weight)
+    else:
+        print("Weight exists. Skip yolo training.")
+    pass
 
-
-pass
-
-def val(config: Config):
-    torch.set_float32_matmul_precision('medium')
-
-    num_class = config.num_class
-    network = Yolo(num_class)
-    network.load_state_dict(torch.load(config.file_yolo_weight, weights_only=True))
-    # network = torch.compile(network, backend="cudagraphs")
-    val_dataloader = DataLoader(H5DatasetYolo(config.file_val_dataset),
-                                batch_size=config.batch_size,
-                                shuffle=False,
-                                num_workers=0,
-                                pin_memory=True,
-                                collate_fn=H5DatasetYolo.collate_fn
-                                )
-
-    trainer = _trainer(config.yolo_epoch)
+    # val
+    network.load_state_dict(torch.load(config.file_yolo_weight, weights_only=True)) # 都加载，不少那几毫秒
     result = trainer.validate(model=network, dataloaders=val_dataloader)
 
-    if not trainer.interrupted:
-        print(result)
-
+    if trainer.interrupted:
+        exit(-1)
+    
+    print(result)
+    
 pass
 
+
 if __name__ == '__main__':
-    train(Config(), skip_if_exists=False)
+    train_val(Config())
