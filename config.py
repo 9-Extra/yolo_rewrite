@@ -1,3 +1,4 @@
+import argparse
 from typing import Literal
 import pathlib
 import dataclasses
@@ -12,10 +13,13 @@ class Config:
     
     # main directory
     run_path: pathlib.Path = pathlib.Path("run")
-    checkpoint_path = run_path / "weight"
     cache_path = run_path / "preprocess"
-    log_path = run_path / "log"
-    summary_path = run_path / "summary"
+    
+    model_name = "yolo"
+    model_specific_path = run_path / model_name
+    checkpoint_path = model_specific_path / "weight"
+    log_path = model_specific_path / "log"
+    summary_path = model_specific_path / "summary"
     
     # datasets path
     dataset_path_drone_train = r"/run/media/yty/盘盘/datasets/DroneTrainDataset/"
@@ -35,10 +39,11 @@ class Config:
     num_class = 1
     batch_size = 8
     yolo_train_epoch = 100
+    yolo_val_interval = 1 # 训练几轮验证一次
     
     yolo_train_dataset = h5_drone_train
     yolo_val_dataset = h5_drone_val
-    file_yolo_weight = checkpoint_path / "yolo.pth"
+    file_yolo_weight = checkpoint_path / f"{model_name}.pth"
 
     # mlp
     mlp_epoch = 20
@@ -47,6 +52,6 @@ class Config:
     file_multi_layer_search_summary = summary_path / "multi_layer_search.json"
 
     # attack
-    h5_extract_features = run_path / "extract_features.h5"
+    h5_extract_features = model_specific_path / "extract_features.h5"
     # vos
-    file_vos_yolo_weight = checkpoint_path / "vos_yolo.pth"
+    file_vos_yolo_weight = model_specific_path / f"vos_{model_name}.pth"

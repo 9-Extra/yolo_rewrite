@@ -31,7 +31,7 @@ def _trainer(config: Config, fast_dev_run: bool = False):
     return pytorch_lightning.Trainer(
         max_epochs=config.yolo_train_epoch,
         precision="32-true",
-        val_check_interval=0.1,
+        check_val_every_n_epoch=config.yolo_val_interval,
         callbacks=[RichProgressBarTinkered(leave=True), RichModelSummary(max_depth=3), checkpoint],
         default_root_dir=config.run_path,
         logger=[
@@ -50,7 +50,7 @@ def train_val(config: Config, skip_train_if_exists: bool = True):
     network = Yolo(num_class)
     # network = torch.compile(network, backend="cudagraphs")
     
-    trainer = _trainer(config.yolo_train_epoch)
+    trainer = _trainer(config)
 
     val_dataloader = DataLoader(H5DatasetYolo(config.yolo_val_dataset),
                                 batch_size=config.batch_size,
@@ -59,7 +59,8 @@ def train_val(config: Config, skip_train_if_exists: bool = True):
                                 pin_memory=True,
                                 collate_fn=H5DatasetYolo.collate_fn
                                 )
-
+    
+    assert len(val_dataloader.dataset.get_label_names()) == num_class, "数据集类型数需要和网络一致"
     
     if not (skip_train_if_exists and os.path.isfile(config.file_yolo_weight)):
         # do train
@@ -70,6 +71,8 @@ def train_val(config: Config, skip_train_if_exists: bool = True):
                                     pin_memory=True,
                                     collate_fn=H5DatasetYolo.collate_fn
                                     )
+        
+        assert len(val_dataloader.dataset.get_label_names()) == num_class, "数据集类型数需要和网络一致"
 
         trainer.fit(model=network, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)  
 

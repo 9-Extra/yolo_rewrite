@@ -352,6 +352,9 @@ class Yolo(pytorch_lightning.LightningModule):
     def on_validation_epoch_end(self):
         for dataloader_idx, stats in self._val_stats.items():
             stats = [numpy.concatenate(x, 0) for x in zip(*stats)]
+            if not (len(stats) != 0 and stats[0].any()):
+                print("不存在正样本，忽略")
+                continue
             tp, fp, p, r, f1, ap, auroc, fpr95, threshold, conf_auroc, conf_fpr95, conf_thr = ap_per_class(stats)
             ap50, ap95 = ap[:, 0], ap[:, -1]  # AP@0.5, AP@0.5:0.95
             mr, map50, map95 = r.mean(), ap50.mean(), ap95.mean()

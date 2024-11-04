@@ -96,10 +96,14 @@ def process_data(origin_img: str, objs: list, target_size: tuple[int, int]):
 
 def raw_dataset2h5(dist: str, data: RawDataset, skip_if_exist: bool = True):
     if skip_if_exist and os.path.isfile(dist):
-        return
+        with h5py.File(dist, "w") as h5f:
+            if "complete" in h5f.attrs:
+                return
     
     os.makedirs(os.path.dirname(dist), exist_ok=True)
     target_size = (640, 640)
+    
+    # data = data.ramdom_sample(1000)
 
     process = functools.partial(process_data, target_size=target_size)
 
@@ -119,12 +123,16 @@ def raw_dataset2h5(dist: str, data: RawDataset, skip_if_exist: bool = True):
             bbox_num = mapped_objs.shape[0]
 
             images.write_direct(numpy.ascontiguousarray(img), dest_sel=i)
-            if bbox_num != 0:
-                slice_ = slice(bbox_idx_offset, bbox_idx_offset + bbox_num)
-                bbox_idx.write_direct(numpy.array([slice_.start, slice_.stop], dtype=numpy.uint32),
-                                      dest_sel=i)
-                bbox.write_direct(mapped_objs, dest_sel=slice_)
-                bbox_idx_offset += bbox_num
+            if bbox_num == 0:
+                continue
+        
+            slice_ = slice(bbox_idx_offset, bbox_idx_offset + bbox_num)
+            bbox_idx.write_direct(numpy.array([slice_.start, slice_.stop], dtype=numpy.uint32),
+                                    dest_sel=i)
+            bbox.write_direct(mapped_objs, dest_sel=slice_)
+            bbox_idx_offset += bbox_num
+            
+        h5f.attrs["complete"] = 1 # 标记为完成
 
     pass
 

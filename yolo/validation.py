@@ -88,7 +88,6 @@ def ap_per_class(stat, eps=1e-16):
         The average precision as computed in py-faster-rcnn.
     """
 
-    # Sort by objectness
     assert len(stat) != 0 and stat[0].any(), "必须包含正样本"
 
     tp, conf, ood_score, pred_cls, target_cls = stat
@@ -101,7 +100,7 @@ def ap_per_class(stat, eps=1e-16):
     nc = unique_classes.shape[0]  # number of classes, number of detections
 
     # Create Precision-Recall curve and compute AP for each class
-    px, py = numpy.linspace(0, 1, 1000), []  # for plotting
+    px = numpy.linspace(0, 1, 1000)  # for plotting
     ap, p, r = numpy.zeros((nc, tp.shape[1])), numpy.zeros((nc, 1000)), numpy.zeros((nc, 1000))
     for ci, c in enumerate(unique_classes):
         i: numpy.ndarray = pred_cls == c  # type: ignore  # 所有当前类型的预测结果
