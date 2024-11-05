@@ -1,10 +1,9 @@
 import os
 
-from RawDataset import RawDataset, DataItem
+from dataset.RawDataset import RawDataset, DataItem
 from typing import Literal
 import xml.dom.minidom
 import tqdm
-import pandas
 
 class _Parser:
     
@@ -69,14 +68,6 @@ class PascalVOC(RawDataset):
                 self.items.append(DataItem(os.path.join(img_dir, filename), res))
         pass
         
-        print(f"共{len(os.listdir(img_dir))}张图像")
-        counter = [0 for _ in range(len(parse.categories_map))]
-        for item in self.items:
-            for obj in item.objs:
-                counter[obj[0]] += 1
-        summary = pandas.DataFrame({"label": parse.categories_map.keys(), "id": parse.categories_map.values(), "count": counter})
-        print(summary.to_string(index=False))    
-
         sp = int(len(self.items) * 0.8)
         if split == "train":
             self.items = self.items[:sp]

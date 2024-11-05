@@ -1,6 +1,5 @@
-import argparse
 from typing import Literal
-import pathlib
+from pathlib import Path
 import dataclasses
 
 import torch
@@ -12,7 +11,7 @@ class Config:
     device = torch.device("cuda")
     
     # main directory
-    run_path: pathlib.Path = pathlib.Path("run")
+    run_path: Path = Path("run")
     cache_path = run_path / "preprocess"
     
     model_name = "yolo"
@@ -22,11 +21,11 @@ class Config:
     summary_path = model_specific_path / "summary"
     
     # datasets path
-    dataset_path_drone_train = r"/run/media/yty/盘盘/datasets/DroneTrainDataset/"
-    dataset_path_drone_test = r"/run/media/yty/盘盘/datasets/DroneTestDataset/"
-    dataset_path_coco = r"/run/media/yty/DATA/迅雷下载"
-    dataset_path_drone_vs_bird = r"/run/media/yty/盘盘/datasets/BirdVsDrone"
-    dataset_path_pascal_vos = r"/home/yty/桌面/workspace/VOC2012/"
+    dataset_path_drone_train = Path(r"/run/media/yty/盘盘/datasets/DroneTrainDataset/")
+    dataset_path_drone_test = Path(r"/run/media/yty/盘盘/datasets/DroneTestDataset/")
+    dataset_path_coco = Path(r"/run/media/yty/DATA/迅雷下载")
+    dataset_path_drone_vs_bird = Path(r"/run/media/yty/盘盘/datasets/BirdVsDrone")
+    dataset_path_pascal_vos = Path(r"/home/yty/桌面/workspace/VOC2012/")
     
     # datasets preprocss cache path
     h5_drone_train = cache_path / "drone_train.h5"
@@ -34,6 +33,7 @@ class Config:
     h5_drone_test = cache_path / "drone_test.h5"
     h5_drone_train = cache_path / "drone_train.h5"
     h5_drone_test_with_coco = cache_path / "drone_test_with_coco.h5"
+    h5_drone_test_with_bird = cache_path / "drone_test_with_bird.h5"
     
     # yolo
     num_class = 1

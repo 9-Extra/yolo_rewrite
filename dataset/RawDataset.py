@@ -1,6 +1,8 @@
 import random
+from typing import Iterable
 
 import cv2
+import pandas
 
 
 class DataItem:
@@ -29,11 +31,46 @@ class RawDataset:
     def __len__(self):
         return len(self.items)
 
-    def ramdom_sample(self, num: int):
+    def ramdom_sample(self, num: int, ramdom_seed: object=None):
         assert num <= len(self.items)
+        if ramdom_seed is not None:
+            random.seed(ramdom_seed)
+        
         samples = random.sample(self.items, num)
         return RawDataset(samples, self.label_names)
 
+    def delete_object(self, *obj_names: str) -> "RawDataset":
+        obj_names = set(obj_names)
+        if len(obj_names) == 0:
+            return
+        assert obj_names.issubset(set(self.label_names))
+        
+        ori_id_map = list(range(len(self.label_names)))    
+        new_label_names = self.label_names[:] # copy
+        for d in obj_names:
+            i = self.label_names.index(d)
+            ori_id_map[i] = -1
+            del new_label_names[i]
+        
+        # 重分配id
+        id = 0
+        for i in range(len(ori_id_map)):
+            if ori_id_map[i] != -1:
+                ori_id_map[i] = id
+                id += 1
+
+        new_items: list[DataItem] = []
+        for item in self.items:
+            new_objs: list[tuple[int, list]] = []
+            for obj in item.objs:
+                new_id = ori_id_map[obj[0]]
+                if new_id != -1:
+                    new_objs.append((new_id, obj[1]))
+            if len(new_objs) != 0:
+                new_items.append(DataItem(item.img, new_objs))
+        
+        return RawDataset(new_items, new_label_names)
+                    
     def get_label_names(self) -> list[str]:
         return self.label_names
 
@@ -50,6 +87,15 @@ class RawDataset:
         cv2.imshow('image', img)
         cv2.waitKey(0)
 
+    def summary(self):
+        print(f"共{len(self.items)}张图像")
+        counter = [0 for _ in range(len(self.label_names))]
+        for item in self.items:
+            for obj in item.objs:
+                counter[obj[0]] += 1
+        summary = pandas.DataFrame({"label": self.label_names, "id": range(len(self.label_names)), "count": counter})
+        print(summary.to_string(index=False))    
+
 
 def delete_all_object(dataset: RawDataset):
     dataset.label_names.clear()
@@ -57,10 +103,11 @@ def delete_all_object(dataset: RawDataset):
         item.objs.clear()
 
 
-def mix_raw_dataset(datasets: list[RawDataset]) -> RawDataset:
+
+def mix_raw_dataset(*datasets: RawDataset) -> RawDataset:
     print("mixing datasets")
     for i, d in enumerate(datasets):
-        print(f"dataset {i} num {len(d)} labels: {d.label_names} ")
+        print(f"dataset {i} num={len(d)} \nlabels: {d.label_names} ")
 
     categories_map = {}
     id = 0
@@ -80,9 +127,7 @@ def mix_raw_dataset(datasets: list[RawDataset]) -> RawDataset:
                 remapped_objs.append((categories_map[name], box))
             final_items.append(DataItem(item.img, remapped_objs))
 
-    label_names = [""] * len(categories_map)
-    for name, id in categories_map.items():
-        label_names[id] = name
+    label_names = list(categories_map.keys())
 
     return RawDataset(final_items, label_names)
 

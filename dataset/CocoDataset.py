@@ -34,7 +34,7 @@ class CocoDataset(RawDataset):
 
         if check_channel:
             items = []
-            for k, v in tqdm.tqdm(item_dict.items()):
+            for v in tqdm.tqdm(item_dict.values()):
                 if len(v.objs) != 0:
                     img = Image.open(v.img)
                     if (hasattr(img, "layers") and img.layers == 3) or img.mode == "RGB":
