@@ -1,44 +1,5 @@
 import argparse
 import sys
-from typing import Sequence
-
-from scheduler import Target
-from config import Config
-import scheduler
-
-config = Config()
-
-
-@Target()
-def _yolo_train():
-    import yolo_train
-    yolo_train.train(config)
-
-
-@Target(_yolo_train)
-def _yolo_val():
-    import yolo_train
-    yolo_train.val(config)
-
-
-@Target(_yolo_train)
-def _safe_val():
-    import safe_val
-    data_paths = [
-        "run/preprocess/drone_train.h5",
-        "run/preprocess/drone_val.h5",
-        "run/preprocess/drone_test.h5",
-        "run/preprocess/drone_test_with_bird.h5",
-        "run/preprocess/drone_test_with_coco.h5"
-    ]
-    safe_val.main(config, data_paths)
-
-
-@Target(_yolo_train)
-def _vos_finetune():
-    import vos_finetune
-    vos_finetune.vos_finetune_val(config)
-
 
 class Inhibitor:
     """
@@ -65,28 +26,6 @@ class Inhibitor:
             ctypes.windll.kernel32.SetThreadExecutionState(
                 Inhibitor.ES_CONTINUOUS)
 
-import search # 导入以注册search相关target
-
-def _run_targets(names: Sequence[str]):
-    targets: list[Target] = []
-    unknown_targets = []
-    for name in names:
-        t = scheduler.get_target_by_name(name)
-        if t is not None:
-            targets.append(t)
-        else:
-            unknown_targets.append(name)
-
-    if len(unknown_targets) != 0:
-        raise RuntimeError(f"存在未知目标: {unknown_targets}")
-
-    print(f"Run targets {names}")
-    with Inhibitor():
-        for t in targets:
-            scheduler.run_target(t.func)
-
-    print("Done!")
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("调用一些乱七八糟的方法")
@@ -104,14 +43,5 @@ if __name__ == '__main__':
 
     # 解析命令行参数
     args = parser.parse_args()
-
-    if args.command == 'list':
-        for name in scheduler.get_target_names():
-            print(name)
-    elif args.command == 'run':
-        if not args.items:
-            print('错误：run 命令需要至少一个项目名称。')
-        else:
-            _run_targets(args.items)
-    else:
-        parser.print_help()
+    
+    # todo

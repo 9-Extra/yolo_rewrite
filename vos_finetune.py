@@ -42,7 +42,7 @@ def _trainer(max_epochs: int, fast_dev_run: bool = False):
 
 
 def vos_finetune_val(config: Config):
-    torch.set_float32_matmul_precision('medium')
+    torch.set_float32_matmul_precision('high')
 
     batch_size = 8
     val_datasets = [

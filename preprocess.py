@@ -174,19 +174,30 @@ if __name__ == "__main__":
         drone_train,
         CocoDataset(
             config.dataset_path_coco / "train2017",
-            config.dataset_path_coco / "annotations/instances_train2017.json",
+            config.dataset_path_coco / "annotations_trainval2017/instances_train2017.json",
         )
         .delete_object("bird", "person")
         .ramdom_sample(len(drone_train), 42)
     )
     print("训练集")
     coco_train.summary()
-    # raw_dataset2h5(config.h5_drone_train, mix_raw_dataset(drone_train, coco_train))
+    raw_dataset2h5(config.h5_drone_train, coco_train)
 
     drone_val = DroneDataset(config.dataset_path_drone_train, split="val")
-    drone_val.summary()
+    coco_val = mix_raw_dataset(
+        drone_val,
+        CocoDataset(
+            config.dataset_path_coco / "val2017",
+            config.dataset_path_coco / "annotations_trainval2017/instances_val2017.json",
+        )
+        .delete_object("bird", "person")
+        .ramdom_sample(len(drone_val), 42),
+    )
     print("验证集")
-    # raw_dataset2h5(config.h5_drone_val, drone_val)
+    coco_val.summary()
+    raw_dataset2h5(config.h5_drone_val, coco_val)
+
+    assert coco_train.get_label_names() == coco_val.get_label_names() 
 
     # coco_val = CocoDataset(
     #     config.dataset_path_coco / "train2017",

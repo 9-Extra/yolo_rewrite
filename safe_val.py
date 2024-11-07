@@ -78,11 +78,12 @@ def val_with_mlp(network: yolo.Network.Yolo, mlp: MLP, val_dataset: Dataset):
 
 
 def main(config: Config, data_paths: Sequence[str]):
+    torch.set_float32_matmul_precision("highest")
     device = torch.device("cuda")
     torch.backends.cudnn.benchmark = True
 
     network: Yolo = Yolo(config.num_class)
-    network.load_state_dict(torch.load("run/weight/yolo.pth", weights_only=True))
+    network.load_state_dict(torch.load(config.file_yolo_weight, weights_only=True))
     network.eval().to(device, non_blocking=True)
 
     feature_name_set = {'backbone.inner.25'}
@@ -102,7 +103,7 @@ def main(config: Config, data_paths: Sequence[str]):
     safe.safe_method.extract_features_h5(
         network,
         feature_name_set,
-        H5DatasetYolo(config.file_train_dataset),
+        H5DatasetYolo(config.yolo_train_dataset),
         attackers,
         config.h5_extract_features
     )
@@ -135,8 +136,8 @@ def main(config: Config, data_paths: Sequence[str]):
     summary_table = pandas.DataFrame(summary_table)
 
     print(summary_table.to_markdown())
-    os.makedirs("run/summary", exist_ok=True )
-    summary_table.to_csv("run/summary/test_result.csv")
+    os.makedirs(config.summary_path, exist_ok=True )
+    summary_table.to_csv(config.summary_path / "test_result.csv")
     print(summary_table.to_latex(index=False))
 
 
@@ -144,9 +145,9 @@ if __name__ == '__main__':
     config = Config()
     data_paths = [
         # "run/preprocess/drone_train.h5",
-        "run/preprocess/drone_val.h5",
-        "run/preprocess/drone_test.h5",
-        "run/preprocess/drone_test_with_bird.h5",
-        "run/preprocess/drone_test_with_coco.h5"
+        config.h5_drone_val,
+        config.h5_drone_test,
+        config.h5_drone_test_with_bird,
+        # config.h5_drone_test_with_coco,
     ]
     main(config, data_paths)

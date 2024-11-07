@@ -44,7 +44,7 @@ def _trainer(config: Config, fast_dev_run: bool = False):
 
 
 def train_val(config: Config, skip_train_if_exists: bool = True):
-    torch.set_float32_matmul_precision('medium')
+    torch.set_float32_matmul_precision('high')
     
     num_class = config.num_class
     network = Yolo(num_class)

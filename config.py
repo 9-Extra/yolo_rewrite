@@ -45,11 +45,10 @@ class Config:
     yolo_val_dataset = h5_drone_val
     file_yolo_weight = checkpoint_path / f"{model_name}.pth"
 
-    # mlp
-    mlp_epoch = 20
-    file_detected_base_dataset = h5_drone_val
-    cache_detected_dataset = cache_path / "cache_detected_dataset.pth"
-    file_multi_layer_search_summary = summary_path / "multi_layer_search.json"
+    # safe
+    safe_mlp_epoch = 20
+    safe_val_dataset = h5_drone_val
+    safe_cache_detect_result = cache_path / "cache_detected_dataset.pth"
 
     # attack
     h5_extract_features = model_specific_path / "extract_features.h5"
