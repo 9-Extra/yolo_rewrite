@@ -38,6 +38,7 @@ class Config:
     # yolo
     num_class = 1
     batch_size = 8
+    img_size = (640, 640)
     yolo_train_epoch = 100
     yolo_val_interval = 1 # 训练几轮验证一次
     

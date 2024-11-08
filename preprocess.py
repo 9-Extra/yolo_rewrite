@@ -165,11 +165,12 @@ def raw_dataset2h5(dist: str, data: RawDataset, skip_if_exist: bool = True):
 
 if __name__ == "__main__":
     config = Config()
+    os.makedirs(config.run_path, exist_ok=True)
 
     drone_train = DroneDataset(config.dataset_path_drone_train, split="train")
     # drone_train.summary()
     # raw_dataset2h5(config.h5_drone_train, drone_train)
-
+    
     coco_train = mix_raw_dataset(
         drone_train,
         CocoDataset(
@@ -181,6 +182,7 @@ if __name__ == "__main__":
     )
     print("训练集")
     coco_train.summary()
+    open(config.run_path / "train_label.txt", "w").write(repr(coco_train.get_label_names()))
     raw_dataset2h5(config.h5_drone_train, coco_train)
 
     drone_val = DroneDataset(config.dataset_path_drone_train, split="val")
