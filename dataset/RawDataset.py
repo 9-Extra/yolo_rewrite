@@ -40,7 +40,7 @@ class RawDataset:
         return RawDataset(samples, self.label_names)
 
     def delete_object(self, *obj_names: str) -> "RawDataset":
-        obj_names = set(obj_names)
+        obj_names: set = set(obj_names)
         if len(obj_names) == 0:
             return
         assert obj_names.issubset(set(self.label_names))

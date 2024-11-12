@@ -20,21 +20,17 @@ def non_max_suppression(
     for prediction in batch_prediction:
         prediction = prediction[prediction[..., 4] > conf_threshold]
 
-        xy, wh, conf, _ = prediction.tensor_split([2, 4, 5], dim=-1)
+        xy, wh, conf, origin_bbox, layer_id, class_logit, extra_data = prediction.split([2, 2, 1, 4, 1, num_class, num_extra_data], dim=-1)
+        class_score = torch.softmax(class_logit, dim=-1)
+        score, cls_id = torch.max(class_score, dim=-1, keepdim=True)
+        conf = conf * score
 
         x1y1 = xy - wh / 2
         x2y2 = xy + wh / 2
         boxes = torch.cat([x1y1, x2y2], -1)
         keep = torchvision.ops.nms(boxes, conf.squeeze(1), iou_threshold)
 
-        prediction = prediction[keep]
-
-        xy, wh, conf, origin_bbox, layer_id, class_logit, extra_data = prediction.split([2, 2, 1, 4, 1, num_class, num_extra_data], dim=-1)
-        x1y1 = xy - wh / 2
-        x2y2 = xy + wh / 2
-
-        cls = torch.argmax(class_logit, dim=-1, keepdim=True)
-        prediction = torch.cat([x1y1, x2y2, conf, origin_bbox, layer_id, cls.float(), extra_data], -1)
+        prediction = torch.cat([x1y1[keep], x2y2[keep], conf[keep], origin_bbox[keep], layer_id[keep], cls_id[keep].float(), extra_data[keep]], -1)
 
         results.append(prediction)
 

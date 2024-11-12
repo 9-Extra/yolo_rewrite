@@ -1,0 +1,6 @@
+model_name="yolo"
+
+num_class=1
+train_dataset="train_pure_drone.h5"
+val_dataset="val_pure_drone.h5"
+

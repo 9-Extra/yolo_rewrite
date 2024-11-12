@@ -10,7 +10,7 @@ import pytorch_lightning
 import torch
 from torch.utils.data import DataLoader
 
-from yolo.Network import Yolo
+from yolo.network import Yolo
 from yolo.non_max_suppression import non_max_suppression
 from yolo.validation import ap_per_class, match_nms_prediction
 

@@ -11,10 +11,10 @@ from torch.utils.data import Dataset, DataLoader
 import safe
 from safe.feature_cache import ExtractFeatureDatabase
 import safe.safe_method
-import yolo.Network
+import yolo.network
 from safe.FeatureExtract import FeatureExtract
 from safe.safe_method import feature_roi_flatten
-from yolo.Network import Yolo
+from yolo.network import Yolo
 from dataset.h5Dataset import H5DatasetYolo
 
 from safe.attack import FSGMAttack
@@ -24,7 +24,7 @@ from yolo.validation import match_nms_prediction, ap_per_class
 
 
 @torch.no_grad()
-def val_with_mlp(network: yolo.Network.Yolo, mlp: MLP, val_dataset: Dataset):
+def val_with_mlp(network: yolo.network.Yolo, mlp: MLP, val_dataset: Dataset):
     device = network.device
     dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=0, pin_memory=True,
                             collate_fn=H5DatasetYolo.collate_fn)

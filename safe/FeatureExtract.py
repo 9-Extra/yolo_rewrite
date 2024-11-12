@@ -62,9 +62,9 @@ class FeatureExtract:
 
 
 if __name__ == '__main__':
-    import yolo.Network
+    import yolo.network
 
-    network = yolo.Network.Yolo(1)
+    network = yolo.network.Yolo(1)
     exporter = FeatureExtract(set())
     exporter.attach(network)
     exporter.detach()

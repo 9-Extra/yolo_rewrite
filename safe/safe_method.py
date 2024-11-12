@@ -16,7 +16,7 @@ from safe.FeatureExtract import FeatureExtract
 from safe.attack import Attacker
 from safe.feature_cache import DetectedDataset, ExtractFeatureDatabase, FeatureSaver
 from safe.mlp import MLP, train_mlp
-from yolo.Network import BackBone, Conv, FeatureConcat, FeatureExporter, Yolo
+from yolo.network import BackBone, Conv, FeatureConcat, FeatureExporter, Yolo
 from yolo.validation import match_nms_prediction_fp_only, process_batch
 
 
@@ -94,7 +94,7 @@ def collect_stats_and_feature(network: Yolo, val_dataset: H5DatasetYolo):
     iouv = numpy.linspace(0.5, 0.95, 10)  # iou vector for mAP@0.5:0.95
     niou = iouv.size
     stats = []
-    ood_feature_collect = {}
+    ood_feature_collect = defaultdict(list)
 
     for img, target in track(dataloader):
         img_h, img_w = img.shape[2:]  # type: ignore
@@ -144,7 +144,7 @@ def collect_stats_and_feature(network: Yolo, val_dataset: H5DatasetYolo):
                     b, c, h, w = feature.shape
 
                     relative_feature = torchvision.ops.roi_align(feature, batch_bbox, (2, 2), w) # type: ignore
-                    ood_feature_collect.setdefault(name, []).append(relative_feature.flatten(start_dim=1))  # 保留第0维
+                    ood_feature_collect[name].append(relative_feature.flatten(start_dim=1).cpu())  # 保留第0维，移到内存节省显存
 
                 stats.append((correct, conf))
         pass
@@ -278,7 +278,7 @@ def extract_features_h5(network: Yolo,
     attackers = new_attackers
     print(f"正在生成{len(attackers)}组特征：", [attacker.name for attacker in attackers])
 
-    train_loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
+    train_loader = DataLoader(H5DatasetYolo(dataset), batch_size=8, shuffle=True, num_workers=0, pin_memory=True,
                               collate_fn=H5DatasetYolo.collate_fn)
 
     device = next(network.parameters()).device

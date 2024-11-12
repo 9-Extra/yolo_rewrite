@@ -8,13 +8,10 @@ import functools
 
 from dataset.h5Dataset import H5DatasetYolo
 from safe.attack import Attacker, FSGMAttack, PDGAttack
+from yolo import Yolo
 
 
-@functools.cache
 def trained_yolo_network(config: Config):
-    from yolo import Yolo
-    import torch
-
     network = Yolo(config.num_class)
     network.load_state_dict(torch.load(config.file_yolo_weight, weights_only=True))
     # network = torch.compile(network)
@@ -28,7 +25,7 @@ def cache_detect_result(config: Config):
         # 存在就跳过
         return
 
-    network = trained_yolo_network()
+    network = trained_yolo_network(config)
     network.to(config.device, non_blocking=True)
 
     val_dataset = H5DatasetYolo(config.safe_val_dataset)
@@ -77,12 +74,12 @@ def search_all_single_layer(config: Config):
     """
     搜索每一个单层
     """
-    network = trained_yolo_network()
+    network = trained_yolo_network(config)
     network.to(config.device, non_blocking=True)
 
     attackers: list[Attacker] = [
         FSGMAttack(0.08),
-        PDGAttack(0.006, 20),
+        # PDGAttack(0.006, 20),
         # *(PDGAttack(e, 10) for e in (0.005, 0.01, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1))
     ]
 
@@ -127,3 +124,6 @@ def mult_epsilon_compare(config: Config):
     ]
     
     _safe_val(config, network, name_set_list, attackers, "episilon_compare", 30)
+    
+if __name__ == '__main__':
+    search_all_single_layer(Config())

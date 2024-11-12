@@ -1,6 +1,6 @@
 import torch
 
-from yolo.Network import Yolo
+from yolo.network import Yolo
 import functools
 
 

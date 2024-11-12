@@ -19,7 +19,7 @@ class RichProgressBarTinkered(RichProgressBar):
         return items
 
 
-def _trainer(max_epochs: int, fast_dev_run: bool = False):
+def _trainer(config: Config, fast_dev_run: bool = False):
     checkpoint = ModelCheckpoint(
         monitor="auroc.0",
         save_weights_only=False,
@@ -27,15 +27,15 @@ def _trainer(max_epochs: int, fast_dev_run: bool = False):
         save_last=True,
     )
 
-    default_root_dir = "run"
+    default_root_dir = config.model_specific_path
 
     return pytorch_lightning.Trainer(
-        max_epochs=max_epochs,
+        max_epochs=30,
         precision="32-true",
         check_val_every_n_epoch=1,
         callbacks=[RichProgressBarTinkered(leave=True), RichModelSummary(max_depth=3), checkpoint],
         default_root_dir=default_root_dir,
-        logger =[TensorBoardLogger(save_dir=default_root_dir, name="vos_logs"), CSVLogger(default_root_dir, name="vos_logs_csv")],
+        logger =[TensorBoardLogger(config.log_path, name="vos_logs"), CSVLogger(config.log_path, name="vos_logs_csv")],
         fast_dev_run=fast_dev_run,
         benchmark=True
     )
@@ -47,16 +47,14 @@ def vos_finetune_val(config: Config):
     batch_size = 8
     val_datasets = [
         H5DatasetYolo(d) for d in
-        ["run/preprocess/drone_val.h5",
-         "run/preprocess/drone_test_with_bird.h5",
-         "run/preprocess/drone_test_with_coco.h5"]
+        [config.h5_drone_val]
     ]
     vos = VosYolo(config.num_class)
     vos.yolo.load_state_dict(torch.load(config.file_yolo_weight, weights_only=True))
     # network = torch.compile(network, backend="cudagraphs")
 
     train_dataloader = DataLoader(
-        H5DatasetYolo(config.file_train_dataset),
+        H5DatasetYolo(config.h5_drone_train),
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
