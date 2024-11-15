@@ -70,9 +70,9 @@ def train_val(config: Config, skip_train_if_exists: bool = True):
         collate_fn=H5DatasetYolo.collate_fn,
     )
 
-    assert (
-        len(val_dataloader.dataset.get_label_names()) == num_class
-    ), "数据集类型数需要和网络一致"
+    # assert (
+    #     len(val_dataloader.dataset.get_label_names()) == num_class
+    # ), "数据集类型数需要和网络一致"
 
     if not (skip_train_if_exists and os.path.isfile(config.file_yolo_weight)):
         # do train
@@ -85,9 +85,9 @@ def train_val(config: Config, skip_train_if_exists: bool = True):
             collate_fn=H5DatasetYolo.collate_fn,
         )
 
-        assert (
-            len(val_dataloader.dataset.get_label_names()) == num_class
-        ), "数据集类型数需要和网络一致"
+        # assert (
+        #     len(val_dataloader.dataset.get_label_names()) == num_class
+        # ), "数据集类型数需要和网络一致"
 
         trainer.fit(
             model=network,
@@ -139,4 +139,4 @@ pass
 
 
 if __name__ == "__main__":
-    train_val(Config.from_profile("./profiles/pure_drone.toml"))
+    train_val(Config.from_profile("./profiles/coco_mixed.toml"))

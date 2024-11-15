@@ -62,6 +62,8 @@ class Config:
 
         # safe
         self.safe_mlp_epoch = 20
+        self.safe_val_dataset = self.cache_path / self.safe_val_dataset
+
 
         self.safe_cache_detect_result = (
             self.cache_path / f"{self.model_name}_cache_detected_dataset.pth"

@@ -3,8 +3,7 @@ from typing import Iterable
 import torch
 from config import Config
 from safe import safe_method
-from safe.feature_cache import ExtractFeatureDatabase
-import functools
+from safe.feature_cache import DetectedDataset, ExtractFeatureDatabase
 
 from dataset.h5Dataset import H5DatasetYolo
 from safe.attack import Attacker, FSGMAttack, PDGAttack
@@ -60,7 +59,7 @@ def _safe_val(
         # 使用收集的数据训练mlp，并在验证集上检验其有效性，生成统计结果
         safe_method.search_layers(
             name_set_list,
-            config.safe_cache_detect_result,
+            DetectedDataset.load(config.safe_cache_detect_result),
             ExtractFeatureDatabase(config.h5_extract_features),
             attacker.name,
             config.summary_path / f"{summary_name}_{attacker.name}.csv",
@@ -126,4 +125,4 @@ def mult_epsilon_compare(config: Config):
     _safe_val(config, network, name_set_list, attackers, "episilon_compare", 30)
     
 if __name__ == '__main__':
-    search_all_single_layer(Config())
+    search_all_single_layer(Config.from_profile("./profiles/coco_mixed.toml"))

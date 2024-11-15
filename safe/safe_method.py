@@ -107,7 +107,6 @@ def collect_stats_and_feature(network: Yolo, val_dataset: H5DatasetYolo):
         y2 = center_y + h / 2
         target[:, 2:] = numpy.stack([x1, y1, x2, y2], -1) * numpy.array([img_w, img_h, img_w, img_h],
                                                                         dtype=numpy.float32)
-        # target = torch.from_numpy(target).to(device)
 
         feature_extractor.ready()
         output = network.inference(img)
@@ -177,6 +176,8 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: DetectedDataset):
 
     collected = torch.cat(collected, dim=1)  # 拼接来自不同层的特征
     assert collected.shape[0] == feature_data.tp.shape[0]  # 样本数一致
+    
+    collected = collected.to(next(mlp.parameters()).device, non_blocking=True)
 
     mlp.eval()
     with torch.no_grad():
@@ -213,7 +214,7 @@ def train_mlp_from_features(
 
     mlp = MLP(feature_dim, layer_name_list)
     # mlp = torch.compile(mlp, backend="cudagraphs", fullgraph=True, disable=False)
-    mlp_acc = train_mlp(mlp, dataset, 64, epoch, device)
+    mlp_acc = train_mlp(mlp, dataset, 256, epoch, device)
 
     return mlp, mlp_acc
 

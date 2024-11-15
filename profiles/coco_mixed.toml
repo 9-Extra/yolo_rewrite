@@ -2,4 +2,5 @@ model_name="yolo_with_coco"
 
 num_class=79
 train_dataset="train_mixed.h5"
-val_dataset="val_mixed.h5"
+val_dataset="val_pure_drone.h5"
+safe_val_dataset="val_pure_drone.h5"

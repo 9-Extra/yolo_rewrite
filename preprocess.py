@@ -174,36 +174,37 @@ if __name__ == "__main__":
     os.makedirs(config.cache_path, exist_ok=True)
 
     drone_train = DroneDataset(dataset_path_drone_train, split="train")
-    # # drone_train.summary()
-    # # raw_dataset2h5(config.h5_drone_train, drone_train)
-    
-    # coco_train = mix_raw_dataset(
-    #     drone_train,
-    #     CocoDataset(
-    #         config.dataset_path_coco / "train2017",
-    #         config.dataset_path_coco / "annotations_trainval2017/instances_train2017.json",
-    #     )
-    #     .delete_object("bird", "person")
-    #     .ramdom_sample(len(drone_train), 42)
-    # )
-    print("训练集")
-    # coco_train.summary()
-    # open(config.run_path / "train_label.txt", "w").write(repr(coco_train.get_label_names()))
+    drone_train.summary()
     raw_dataset2h5(config.cache_path / "train_pure_drone.h5", drone_train)
+    
+    coco_train = mix_raw_dataset(
+        drone_train,
+        CocoDataset(
+            dataset_path_coco / "train2017",
+            dataset_path_coco / "annotations_trainval2017/instances_train2017.json",
+        )
+        .delete_object("bird", "person")
+        .ramdom_sample(len(drone_train), 42)
+    )
+    coco_train.summary()
+    open(config.run_path / "train_label.txt", "w").write(repr(coco_train.get_label_names()))
+    raw_dataset2h5(config.cache_path / "train_mixed.h5", coco_train)
 
     drone_val = DroneDataset(dataset_path_drone_train, split="val")
-    # coco_val = mix_raw_dataset(
-    #     drone_val,
-    #     CocoDataset(
-    #         config.dataset_path_coco / "val2017",
-    #         config.dataset_path_coco / "annotations_trainval2017/instances_val2017.json",
-    #     )
-    #     .delete_object("bird", "person")
-    # )
-    # print("验证集")
-    # coco_val.summary()
     raw_dataset2h5(config.cache_path / "val_pure_drone.h5", drone_val)
-
+    
+    coco_val = mix_raw_dataset(
+        drone_val,
+        CocoDataset(
+            dataset_path_coco / "val2017",
+            dataset_path_coco / "annotations_trainval2017/instances_val2017.json",
+        )
+        .delete_object("bird", "person")
+    )
+    print("验证集")
+    coco_val.summary()
+    raw_dataset2h5(config.cache_path / "val_mixed.h5", coco_val)
+    
     # assert coco_train.get_label_names() == coco_val.get_label_names() 
 
     # drone_test = DroneTestDataset(config.dataset_path_drone_test)

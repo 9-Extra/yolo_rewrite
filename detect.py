@@ -93,6 +93,8 @@ def _draw_prediction(
 
 
 def detect(config: Config, input_images: list[str]):
+    assert len(input_images) != 0
+    
     torch.set_float32_matmul_precision("highest")
     device = config.device
 
@@ -103,6 +105,7 @@ def detect(config: Config, input_images: list[str]):
     network.eval().to(device, non_blocking=True)
 
     def get_batch():
+        i = -1 # 保证不足一个batch的情况正常工作
         for i in range(len(input_images) // config.batch_size):
             img_list = input_images[i * config.batch_size : (i + 1) * config.batch_size]
             images = []
@@ -111,7 +114,7 @@ def detect(config: Config, input_images: list[str]):
                 images.append(img)
 
             img_batch = torch.from_numpy(numpy.stack(images))
-            yield img_batch.to(device, non_blocking=True).float() / 255, img_list
+            yield img_batch, img_list
 
         # 余下的
         img_list = input_images[(i + 1) * config.batch_size :]
@@ -126,8 +129,8 @@ def detect(config: Config, input_images: list[str]):
             (0, 0, 0, 0, 0, 0, 0, config.batch_size - img_batch.shape[0]),
             "constant",
             0,
-        )
-        yield img_batch.to(device, non_blocking=True).float() / 255, img_list
+        ) # 补充至相同大小
+        yield img_batch, img_list
 
     save_dir = config.run_path / "result"
     os.makedirs(save_dir, exist_ok=True)
@@ -135,6 +138,7 @@ def detect(config: Config, input_images: list[str]):
     for batch, img_list in tqdm.tqdm(
         get_batch(), total=math.ceil(len(input_images) / config.batch_size)
     ):
+        batch = batch.to(device, non_blocking=True).float() / 255
         predictions = network.inference(batch)
         for prediction, img_path in zip(predictions, img_list):
             img = _draw_prediction(img_path, prediction, config.img_size, label_names)
@@ -144,5 +148,5 @@ def detect(config: Config, input_images: list[str]):
 
 
 if __name__ == "__main__":
-    path = "/mnt/panpan/datasets/coco2017/val2017"
-    detect(Config(), ImageReader(path).get_image_paths())
+    path = "/mnt/panpan/datasets/coco2017/train2017"
+    detect(Config.from_profile("./profiles/pure_drone.toml"), ImageReader(path).get_image_paths())

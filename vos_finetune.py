@@ -82,4 +82,4 @@ def vos_finetune_val(config: Config):
 
 if __name__ == '__main__':
     # vos_finetune(Config())
-    vos_finetune_val(Config())
+    vos_finetune_val(Config.from_profile("./profiles/pure_drone.toml"))
