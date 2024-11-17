@@ -125,7 +125,7 @@ def main(config: Config, data_paths: Sequence[str]):
         summary_table = []
         for path in data_paths:
             print(f"正在使用数据集{path}，对抗攻击方法{attacker.name}验证网络")
-            summary = {"dataset": path, "attacker": attacker.name}
+            summary = {"dataset": os.path.basename(path), "attacker": attacker.name}
 
             dataset = H5DatasetYolo(path)
             summary.update(val_with_mlp(network, mlp, dataset))
@@ -142,12 +142,10 @@ def main(config: Config, data_paths: Sequence[str]):
 
 
 if __name__ == '__main__':
-    config = Config()
+    config = Config.from_profile("./profiles/coco_mixed.toml")
     data_paths = [
-        # "run/preprocess/drone_train.h5",
-        config.h5_drone_val,
-        config.h5_drone_test,
-        config.h5_drone_test_with_bird,
-        # config.h5_drone_test_with_coco,
+        config.cache_path / "test_pure_drone.h5",
+        config.cache_path / "test_drone_with_coco_bird.h5",
+        config.cache_path / "test_drone_with_bird.h5"
     ]
     main(config, data_paths)

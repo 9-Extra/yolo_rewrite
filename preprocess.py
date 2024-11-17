@@ -1,6 +1,7 @@
 import functools
 import os
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import h5py
@@ -112,14 +113,18 @@ def process_data(origin_img: str, objs: list, target_size: tuple[int, int]):
     return img, mapped_objs
 
 
-def raw_dataset2h5(dist: str, data: RawDataset, skip_if_exist: bool = True):
+def raw_dataset2h5(
+    dist: str, data: Callable[[], RawDataset], skip_if_exist: bool = True
+):
     if skip_if_exist and os.path.isfile(dist):
-        with h5py.File(dist, "w") as h5f:
+        with h5py.File(dist, "r") as h5f:
             if "complete" in h5f.attrs:
                 return
 
     os.makedirs(os.path.dirname(dist), exist_ok=True)
     target_size = (640, 640)
+    
+    data = data() # get
 
     # data = data.ramdom_sample(1000)
 
@@ -149,7 +154,7 @@ def raw_dataset2h5(dist: str, data: RawDataset, skip_if_exist: bool = True):
             assert bbox_num != 0
 
             images.write_direct(numpy.ascontiguousarray(img), dest_sel=i)
-            
+
             slice_ = slice(bbox_idx_offset, bbox_idx_offset + bbox_num)
             bbox_idx.write_direct(
                 numpy.array([slice_.start, slice_.stop], dtype=numpy.uint32), dest_sel=i
@@ -170,56 +175,91 @@ if __name__ == "__main__":
     dataset_path_coco: Path = Path(r"/mnt/panpan/datasets/coco2017")
     dataset_path_drone_vs_bird: Path = Path(r"/mnt/panpan/datasets/BirdVsDrone")
     dataset_path_pascal_vos: Path = Path(r"/home/yty/桌面/workspace/VOC2012/")
-    
+
     os.makedirs(config.cache_path, exist_ok=True)
 
-    drone_train = DroneDataset(dataset_path_drone_train, split="train")
-    drone_train.summary()
-    raw_dataset2h5(config.cache_path / "train_pure_drone.h5", drone_train)
-    
-    coco_train = mix_raw_dataset(
-        drone_train,
-        CocoDataset(
-            dataset_path_coco / "train2017",
-            dataset_path_coco / "annotations_trainval2017/instances_train2017.json",
+    @functools.cache
+    def get_drone_train():
+        drone_train = DroneDataset(dataset_path_drone_train, split="train")
+        drone_train.summary()
+        return drone_train
+
+    raw_dataset2h5(config.cache_path / "train_pure_drone.h5", get_drone_train)
+
+    @functools.cache
+    def get_coco_train():
+        coco_train = mix_raw_dataset(
+            get_drone_train(),
+            CocoDataset(
+                dataset_path_coco / "train2017",
+                dataset_path_coco / "annotations_trainval2017/instances_train2017.json",
+            )
+            .delete_object("bird", "person")
+            .ramdom_sample(len(get_drone_train()), 42),
         )
-        .delete_object("bird", "person")
-        .ramdom_sample(len(drone_train), 42)
-    )
-    coco_train.summary()
-    open(config.run_path / "train_label.txt", "w").write(repr(coco_train.get_label_names()))
-    raw_dataset2h5(config.cache_path / "train_mixed.h5", coco_train)
-
-    drone_val = DroneDataset(dataset_path_drone_train, split="val")
-    raw_dataset2h5(config.cache_path / "val_pure_drone.h5", drone_val)
-    
-    coco_val = mix_raw_dataset(
-        drone_val,
-        CocoDataset(
-            dataset_path_coco / "val2017",
-            dataset_path_coco / "annotations_trainval2017/instances_val2017.json",
+        coco_train.summary()
+        open(config.run_path / "train_label.txt", "w").write(
+            repr(coco_train.get_label_names())
         )
-        .delete_object("bird", "person")
+        return coco_train
+
+    raw_dataset2h5(config.cache_path / "train_mixed.h5", get_coco_train)
+
+    @functools.cache
+    def get_drone_val():
+        drone_val = DroneDataset(dataset_path_drone_train, split="val")
+        return drone_val
+
+    raw_dataset2h5(config.cache_path / "val_pure_drone.h5", get_drone_val)
+
+    @functools.cache
+    def get_coco_val():
+        print("验证集")
+        coco_val = mix_raw_dataset(
+            get_drone_val(),
+            CocoDataset(
+                dataset_path_coco / "val2017",
+                dataset_path_coco / "annotations_trainval2017/instances_val2017.json",
+            ).delete_object("bird", "person"),
+        )
+        coco_val.summary()
+        return coco_val
+
+    raw_dataset2h5(config.cache_path / "val_mixed.h5", get_coco_val)
+
+    # assert coco_train.get_label_names() == coco_val.get_label_names()
+
+    @functools.cache
+    def get_drone_test():
+        print("原测试集")
+        drone_test = DroneTestDataset(dataset_path_drone_test)
+        drone_test.summary()
+        return drone_test
+
+    raw_dataset2h5(config.cache_path / "test_pure_drone.h5", get_drone_test)
+
+    @functools.cache
+    def get_coco_bird():
+        print("测试集+coco中的鸟图像")
+        coco_bird = mix_raw_dataset(
+            get_drone_test(),
+            CocoBird(
+                dataset_path_coco / "val2017",
+                dataset_path_coco / "annotations_trainval2017/instances_val2017.json",
+            ),
+        )
+        coco_bird.summary()
+        return coco_bird
+
+    raw_dataset2h5(config.cache_path / "test_drone_with_coco_bird.h5", get_coco_bird)
+
+    @functools.cache
+    def get_bird():
+        bird = BirdVSDroneBird(os.path.join(dataset_path_drone_vs_bird, "Birds"))
+        print("鸟图像数=", len(bird))
+        return bird
+
+    raw_dataset2h5(
+        config.cache_path / "test_drone_with_bird.h5",
+        lambda: mix_raw_dataset(get_drone_test(), get_coco_bird()),
     )
-    print("验证集")
-    coco_val.summary()
-    raw_dataset2h5(config.cache_path / "val_mixed.h5", coco_val)
-    
-    # assert coco_train.get_label_names() == coco_val.get_label_names() 
-
-    # drone_test = DroneTestDataset(config.dataset_path_drone_test)
-    # drone_test.summary()
-    # print("原测试集")
-    # raw_dataset2h5(config.h5_drone_test, drone_test)
-
-    # coco_bird = CocoBird(
-    #     os.path.join(config.dataset_path_coco, "train2017"),
-    #     os.path.join(config.dataset_path_coco, "annotations/instances_train2017.json"),
-    # )
-
-    # print("Coco中鸟图像数=", len(coco_bird))
-    # # raw_dataset2h5(config.h5_drone_test_with_coco, mix_raw_dataset([drone_test, coco_bird]))
-
-    # bird = BirdVSDroneBird(os.path.join(config.dataset_path_drone_vs_bird, "Birds"))
-    # print("鸟图像数=", len(bird))
-    # raw_dataset2h5(config.h5_drone_test_with_bird, mix_raw_dataset([drone_test, bird]))

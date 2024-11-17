@@ -125,4 +125,4 @@ def mult_epsilon_compare(config: Config):
     _safe_val(config, network, name_set_list, attackers, "episilon_compare", 30)
     
 if __name__ == '__main__':
-    search_all_single_layer(Config.from_profile("./profiles/coco_mixed.toml"))
+    search_all_single_layer(Config.from_profile("./profiles/pure_drone.toml"))
