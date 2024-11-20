@@ -17,7 +17,7 @@ from safe.safe_method import feature_roi_flatten
 from yolo.network import Yolo
 from dataset.h5Dataset import H5DatasetYolo
 
-from safe.attack import FSGMAttack
+from safe.attack import FSGMAttack, PDGAttack
 from safe.mlp import MLP
 from config import Config
 from yolo.validation import match_nms_prediction, ap_per_class
@@ -96,14 +96,14 @@ def main(config: Config, data_paths: Sequence[str]):
     attackers = [
         FSGMAttack(0.08),
         # *(PDGAttack(e, 20) for e in (0.005, 0.006, 0.007)),
-        # PDGAttack(0.006, 20)
+        PDGAttack(0.006, 20)
     ]
     
 
     safe.safe_method.extract_features_h5(
         network,
         feature_name_set,
-        H5DatasetYolo(config.yolo_train_dataset),
+        config.yolo_train_dataset,
         attackers,
         config.h5_extract_features
     )

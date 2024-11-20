@@ -52,7 +52,7 @@ class Config:
         self.checkpoint_path = self.model_specific_path / "weight"
         self.log_path = self.model_specific_path / "log"
         self.summary_path = self.model_specific_path / "summary"
-        
+
         # datasets
         self.yolo_train_dataset = self.cache_path / self.yolo_train_dataset
         self.yolo_val_dataset = self.cache_path / self.yolo_val_dataset
@@ -63,7 +63,6 @@ class Config:
         # safe
         self.safe_mlp_epoch = 20
         self.safe_val_dataset = self.cache_path / self.safe_val_dataset
-
 
         self.safe_cache_detect_result = (
             self.cache_path / f"{self.model_name}_cache_detected_dataset.pth"
@@ -82,18 +81,20 @@ class Config:
         toml_dict: dict = (
             tomllib.load(open(toml_path, "rb")) if toml_path is not None else {}
         )
-        return Config(
-            **dict(
-                model_name=toml_dict["model_name"],
-                num_class=toml_dict["num_class"],
-                batch_size=toml_dict.get("batch_size", 64),
-                yolo_train_epoch=toml_dict.get("train_epoch", 100),
-                yolo_val_interval=toml_dict.get("val_interval", 1),
-                yolo_train_dataset=toml_dict["train_dataset"],
-                yolo_val_dataset=toml_dict["val_dataset"],
-                safe_val_dataset=toml_dict.get(
-                    "safe_val_dataset", toml_dict["val_dataset"]
-                ),
-                **kw_args,
-            )
+
+        toml_dict = dict(
+            model_name=toml_dict["model_name"],
+            num_class=toml_dict["num_class"],
+            batch_size=toml_dict.get("batch_size", 64),
+            yolo_train_epoch=toml_dict.get("train_epoch", 100),
+            yolo_val_interval=toml_dict.get("val_interval", 1),
+            yolo_train_dataset=toml_dict["train_dataset"],
+            yolo_val_dataset=toml_dict["val_dataset"],
+            safe_val_dataset=toml_dict.get(
+                "safe_val_dataset", toml_dict["val_dataset"]
+            ),
         )
+        
+        toml_dict.update(kw_args)
+
+        return Config(**toml_dict)

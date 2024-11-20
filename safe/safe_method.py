@@ -56,7 +56,6 @@ def feature_roi_flatten(
         result[k] = torch.cat(v)
 
     return result
-    pass
 
 
 class ExtractAll:
@@ -180,7 +179,7 @@ def compute_auroc_fpr95(mlp: MLP, feature_data: DetectedDataset):
     collected = collected.to(next(mlp.parameters()).device, non_blocking=True)
 
     mlp.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         ood_score = mlp(collected).numpy(force=True)
 
     fpr, tpr, _ = metrics.roc_curve(feature_data.tp, ood_score)
@@ -254,12 +253,12 @@ def search_layers(name_set_list: list[set],
             auroc, fpr95 = compute_auroc_fpr95(mlp_network, feature_data)
 
             print(f"{mlp_acc=:%} {auroc=} {fpr95=}")
-            spamwriter.writerow([str(name_set), f"{mlp_acc:%}", auroc, fpr95])
+            spamwriter.writerow([str(name_set), mlp_acc, auroc, fpr95])
 
 
 def extract_features_h5(network: Yolo,
                         feature_name_set: set,
-                        dataset: Dataset,
+                        dataset: str,
                         attackers: Sequence[Attacker],
                         h5_file_name: str):
 

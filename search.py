@@ -92,19 +92,16 @@ def search_all_single_layer(config: Config):
 
 def search_combine_layer(config: Config):
     
-    network = trained_yolo_network()
+    network = trained_yolo_network(config)
     network.to(config.device, non_blocking=True)
     
-    attackers = [FSGMAttack(e) for e in (0.05, 0.06, 0.07, 0.08, 0.09, 0.1)]
+    attackers = [FSGMAttack(0.08), PDGAttack(0.003, 5)]
 
     name_set_list = [
-        *[{"backbone.inner.25"} for _ in range(3)],
-        *[{"backbone.inner.25", "backbone.inner.21"} for _ in range(3)],
-        *[
-            {"backbone.inner.25", "backbone.inner.21", "backbone.inner.23.norm"}
-            for _ in range(3)
-        ],
-    ]
+        {"backbone.inner.25"},
+        {"backbone.inner.25", "backbone.inner.21"},
+        {"backbone.inner.25", "backbone.inner.21", "backbone.inner.23.norm"},
+    ] * 3
     
     _safe_val(config, network, name_set_list, attackers, "multi_layer", 20)
 
@@ -125,4 +122,6 @@ def mult_epsilon_compare(config: Config):
     _safe_val(config, network, name_set_list, attackers, "episilon_compare", 30)
     
 if __name__ == '__main__':
-    search_all_single_layer(Config.from_profile("./profiles/pure_drone.toml"))
+    config = Config.from_profile("./profiles/coco_mixed.toml")
+    # search_all_single_layer(config)
+    search_combine_layer(config)
