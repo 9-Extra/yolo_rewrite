@@ -151,7 +151,6 @@ def raw_dataset2h5(
         for i, d in enumerate(tqdm.tqdm(data, total=image_count, desc="预处理图像")):
             img, mapped_objs = process(d.img, d.objs)
             bbox_num = mapped_objs.shape[0]
-            assert bbox_num != 0
 
             images.write_direct(numpy.ascontiguousarray(img), dest_sel=i)
 
@@ -159,8 +158,9 @@ def raw_dataset2h5(
             bbox_idx.write_direct(
                 numpy.array([slice_.start, slice_.stop], dtype=numpy.uint32), dest_sel=i
             )
-            bbox.write_direct(mapped_objs, dest_sel=slice_)
-            bbox_idx_offset += bbox_num
+            if bbox_num != 0:
+                bbox.write_direct(mapped_objs, dest_sel=slice_)
+                bbox_idx_offset += bbox_num
 
         h5f.attrs["complete"] = 1  # 标记为完成
 
@@ -224,11 +224,29 @@ if __name__ == "__main__":
     raw_dataset2h5(config.cache_path / "val_voc.h5", get_voc_val)
 
     @functools.cache
+    def get_vos_coco_mixed_safe():
+        voc_val = get_voc_val()
+        print("VOS COCO混合验证集")
+        vos_coco_mixed = mix_raw_dataset(
+            voc_val,
+            CocoDataset(
+                dataset_path_coco / "val2017",
+                dataset_path_coco / "annotations_trainval2017/instances_val2017.json",
+            ).ramdom_sample(len(voc_val)),
+            label_names=voc_val.get_label_names()
+        )
+        vos_coco_mixed.summary()
+        return vos_coco_mixed
+
+    raw_dataset2h5(config.cache_path / "vos_coco_mixed.h5", get_vos_coco_mixed_safe)
+
+    @functools.cache
     def get_drone_val():
         drone_val = DroneDataset(dataset_path_drone_train, split="val")
         return drone_val
 
     raw_dataset2h5(config.cache_path / "val_pure_drone.h5", get_drone_val)
+
 
     @functools.cache
     def get_coco_val():
@@ -244,6 +262,7 @@ if __name__ == "__main__":
         return coco_val
 
     raw_dataset2h5(config.cache_path / "val_mixed.h5", get_coco_val)
+    
 
     # assert coco_train.get_label_names() == coco_val.get_label_names()
 

@@ -103,19 +103,25 @@ def delete_all_object(dataset: RawDataset):
         item.objs.clear()
 
 
-
-def mix_raw_dataset(*datasets: RawDataset) -> RawDataset:
+def mix_raw_dataset(*datasets: RawDataset, label_names: list[str]=None) -> RawDataset:
     print("mixing datasets")
     for i, d in enumerate(datasets):
         print(f"dataset {i} num={len(d)} \nlabels: {d.label_names} ")
 
-    categories_map = {}
-    id = 0
-    for d in datasets:
-        for name in d.label_names:
-            if name not in categories_map:
-                categories_map[name] = id
-                id += 1
+    if label_names is None:
+        # 从数据集生成新label
+        categories_map = {}
+        id = 0
+        for d in datasets:
+            for name in d.label_names:
+                if name not in categories_map:
+                    categories_map[name] = id
+                    id += 1
+                    
+        label_names = list(categories_map.keys())
+    else:
+        # 使用给定的label_names
+        categories_map = {label: i for i, label in enumerate(label_names)}    
 
     final_items = []
     for d in datasets:
@@ -124,10 +130,10 @@ def mix_raw_dataset(*datasets: RawDataset) -> RawDataset:
             for i in range(len(item.objs)):
                 name = d.label_names[item.objs[i][0]]
                 box = item.objs[i][1]
-                remapped_objs.append((categories_map[name], box))
+                if name in categories_map: 
+                    remapped_objs.append((categories_map[name], box))
+            # if len(remapped_objs) != 0: 
             final_items.append(DataItem(item.img, remapped_objs))
-
-    label_names = list(categories_map.keys())
 
     return RawDataset(final_items, label_names)
 
