@@ -108,7 +108,7 @@ def main(config: Config, data_paths: Sequence[str]):
         config.h5_extract_features
     )
 
-    summary_table = pandas.DataFrame(columns=['dataset', 'attacker', 'map50', 'map95', 'recall', 'auroc', 'fpr95', 'conf_auroc', 'conf_fpr95'])  # 收集结果
+    summary_table = []
     for attacker in attackers:
         mlp, _ = safe.safe_method.train_mlp_from_features(
             layer_name_list,
@@ -121,8 +121,7 @@ def main(config: Config, data_paths: Sequence[str]):
         mlp.eval().to(device, non_blocking=True)
         print("提取特征层：", mlp.layer_name_list)
         print("总特征长度：", mlp.in_dim)
-
-        summary_table = []
+    
         for path in data_paths:
             print(f"正在使用数据集{path}，对抗攻击方法{attacker.name}验证网络")
             summary = {"dataset": os.path.basename(path), "attacker": attacker.name}
@@ -133,7 +132,7 @@ def main(config: Config, data_paths: Sequence[str]):
             summary_table.append(summary)
         pass
 
-    summary_table = pandas.DataFrame(summary_table)
+    summary_table = pandas.DataFrame(summary_table, columns=['dataset', 'attacker', 'map50', 'map95', 'recall', 'auroc', 'fpr95', 'conf_auroc', 'conf_fpr95'])
 
     print(summary_table.to_markdown())
     os.makedirs(config.summary_path, exist_ok=True )

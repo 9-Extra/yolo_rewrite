@@ -63,7 +63,7 @@ def train_val(config: Config, skip_train_if_exists: bool = True):
 
     val_dataloader = DataLoader(
         H5DatasetYolo(config.yolo_val_dataset),
-        batch_size=config.batch_size,
+        batch_size=config.train_batch_size,
         shuffle=False,
         num_workers=8,
         pin_memory=True,
@@ -78,7 +78,7 @@ def train_val(config: Config, skip_train_if_exists: bool = True):
         # do train
         train_dataloader = DataLoader(
             H5DatasetYolo(config.yolo_train_dataset),
-            batch_size=config.batch_size,
+            batch_size=config.train_batch_size,
             shuffle=True,
             num_workers=8,
             pin_memory=True,
@@ -106,7 +106,7 @@ def train_val(config: Config, skip_train_if_exists: bool = True):
 
     train_dataloader = DataLoader(
         H5DatasetYolo(config.yolo_train_dataset),
-        batch_size=config.batch_size,
+        batch_size=config.train_batch_size,
         shuffle=False,
         num_workers=8,
         pin_memory=True,
@@ -139,4 +139,4 @@ pass
 
 
 if __name__ == "__main__":
-    train_val(Config.from_profile("./profiles/coco_mixed.toml"))
+    train_val(Config.from_profile("./profiles/pure_voc.toml"))

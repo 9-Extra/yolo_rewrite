@@ -26,6 +26,7 @@ class Config:
     num_class: int
     # num_class = 79
     batch_size: int
+    train_batch_size: int
     img_size: tuple[int, int] = dataclasses.field(init=False)
     yolo_train_epoch: int
     yolo_val_interval: int  # 训练几轮验证一次
@@ -86,6 +87,7 @@ class Config:
             model_name=toml_dict["model_name"],
             num_class=toml_dict["num_class"],
             batch_size=toml_dict.get("batch_size", 64),
+            train_batch_size=toml_dict.get("train_batch_size", toml_dict.get("batch_size", 64)),
             yolo_train_epoch=toml_dict.get("train_epoch", 100),
             yolo_val_interval=toml_dict.get("val_interval", 1),
             yolo_train_dataset=toml_dict["train_dataset"],

@@ -67,8 +67,6 @@ def _safe_val(
             config.device,
         )
 
-
-
 def search_all_single_layer(config: Config):
     """
     搜索每一个单层

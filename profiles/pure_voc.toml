@@ -1,0 +1,8 @@
+model_name="voc_yolo"
+
+num_class=20
+train_batch_size = 16
+train_dataset="train_voc.h5"
+val_dataset="val_voc.h5"
+safe_val_dataset="val_mixed.h5"
+

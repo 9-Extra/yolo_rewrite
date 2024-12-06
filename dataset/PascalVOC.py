@@ -4,6 +4,7 @@ from dataset.RawDataset import RawDataset, DataItem
 from typing import Literal
 import xml.dom.minidom
 import tqdm
+import random
 
 class _Parser:
     
@@ -61,8 +62,11 @@ class PascalVOC(RawDataset):
         parse = _Parser()
 
         self.items: list[DataItem] = []
-        # 为了保证在不同系统上分割的训练集是一致的，故排序
-        for xml in tqdm.tqdm(sorted(os.listdir(ann_dir))):
+        # 为了保证在不同系统上分割的训练集是一致的，故排序后再用固定随机数乱序
+        xml_files = sorted(os.listdir(ann_dir))
+        random.seed(42)
+        random.shuffle(xml_files)
+        for xml in tqdm.tqdm(xml_files):
             filename, res = parse.parse_xml(os.path.join(ann_dir, xml))
             if len(res) != 0:
                 self.items.append(DataItem(os.path.join(img_dir, filename), res))

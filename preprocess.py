@@ -174,7 +174,7 @@ if __name__ == "__main__":
     dataset_path_drone_test: Path = Path(r"/mnt/panpan/datasets/DroneTestDataset/")
     dataset_path_coco: Path = Path(r"/mnt/panpan/datasets/coco2017")
     dataset_path_drone_vs_bird: Path = Path(r"/mnt/panpan/datasets/BirdVsDrone")
-    dataset_path_pascal_vos: Path = Path(r"/home/yty/桌面/workspace/VOC2012/")
+    dataset_path_pascal_vos: Path = Path(r"/mnt/panpan/datasets/VOC2012")
 
     os.makedirs(config.cache_path, exist_ok=True)
 
@@ -184,7 +184,7 @@ if __name__ == "__main__":
         drone_train.summary()
         return drone_train
 
-    raw_dataset2h5(config.cache_path / "train_pure_drone.h5", get_drone_train)
+    # raw_dataset2h5(config.cache_path / "train_pure_drone.h5", get_drone_train)
 
     @functools.cache
     def get_coco_train():
@@ -204,6 +204,24 @@ if __name__ == "__main__":
         return coco_train
 
     raw_dataset2h5(config.cache_path / "train_mixed.h5", get_coco_train)
+    
+    @functools.cache
+    def get_voc_train():
+        print("VOC训练集")
+        voc_train = PascalVOC(dataset_path_pascal_vos)
+        voc_train.summary()
+        return voc_train
+
+    raw_dataset2h5(config.cache_path / "train_voc.h5", get_voc_train)
+    
+    @functools.cache
+    def get_voc_val():
+        print("VOC验证集")
+        voc_val = PascalVOC(dataset_path_pascal_vos, split="val")
+        voc_val.summary()
+        return voc_val
+
+    raw_dataset2h5(config.cache_path / "val_voc.h5", get_voc_val)
 
     @functools.cache
     def get_drone_val():
